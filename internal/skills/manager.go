@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -90,7 +91,7 @@ func NewManager(allSkills, activeSkills []*Skill, states []*SkillState, opts ...
 func (m *Manager) AllSkills() []*Skill {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.allSkills
+	return append([]*Skill(nil), m.allSkills...)
 }
 
 // ActiveSkills returns the post-filter list of active skills (after
@@ -98,18 +99,59 @@ func (m *Manager) AllSkills() []*Skill {
 func (m *Manager) ActiveSkills() []*Skill {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.activeSkills
+	return append([]*Skill(nil), m.activeSkills...)
+}
+
+// Refresh re-runs discovery and atomically replaces this workspace's skill
+// snapshot. It returns true only when an observable discovery input or result
+// changed. Callers can use that signal to rebuild prompt metadata without
+// doing extra prompt work on unchanged turns.
+func (m *Manager) Refresh(cfg DiscoveryConfig) bool {
+	allSkills, activeSkills, states := DiscoverFromConfig(cfg)
+	resolvedPaths := cfg.ResolvePaths()
+
+	m.mu.Lock()
+	changed := !reflect.DeepEqual(m.allSkills, allSkills) ||
+		!reflect.DeepEqual(m.activeSkills, activeSkills) ||
+		!reflect.DeepEqual(m.states, states) ||
+		!reflect.DeepEqual(m.resolvedPaths, resolvedPaths) ||
+		m.workingDir != cfg.WorkingDir
+	if changed {
+		m.allSkills = allSkills
+		m.activeSkills = activeSkills
+		m.states = cloneStates(states)
+		m.resolvedPaths = append([]string(nil), resolvedPaths...)
+		m.workingDir = cfg.WorkingDir
+	}
+	globalMirror := m.globalMirror
+	m.mu.Unlock()
+
+	if !changed {
+		return false
+	}
+	if globalMirror {
+		SetLatestStates(states)
+	}
+	m.broker.Publish(pubsub.UpdatedEvent, Event{States: cloneStates(states)})
+	if globalMirror {
+		PublishStates(states)
+	}
+	return true
 }
 
 // ResolvedPaths returns the expanded skills directory paths stored at
 // construction time.
 func (m *Manager) ResolvedPaths() []string {
-	return m.resolvedPaths
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.resolvedPaths...)
 }
 
 // WorkingDir returns the workspace working directory stored at
 // construction time.
 func (m *Manager) WorkingDir() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.workingDir
 }
 

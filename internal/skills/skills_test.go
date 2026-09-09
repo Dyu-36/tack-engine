@@ -518,3 +518,26 @@ func TestFilter(t *testing.T) {
 		})
 	}
 }
+func TestDiscoverExcludesArchive(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	writeSkill := func(dir, name string) {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, name), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name, SkillFileName), []byte(`---
+name: `+name+`
+description: Test skill.
+---
+`), 0o644))
+	}
+
+	writeSkill(tmpDir, "active-skill")
+	writeSkill(filepath.Join(tmpDir, ".archive"), "archived-skill")
+
+	skills, states := DiscoverWithStates([]string{tmpDir})
+	require.Len(t, skills, 1)
+	require.Equal(t, "active-skill", skills[0].Name)
+	for _, state := range states {
+		require.NotContains(t, filepath.ToSlash(state.Path), "/.archive/")
+	}
+}

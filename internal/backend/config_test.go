@@ -67,6 +67,16 @@ func TestSetConfigField_PublishesConfigChanged(t *testing.T) {
 	awaitConfigChanged(t, evc, ws.ID)
 }
 
+func TestSetConfigFields_PublishesConfigChanged(t *testing.T) {
+	b, ws, evc := newPublishingWorkspace(t)
+
+	require.NoError(t, b.SetConfigFields(ws.ID, config.ScopeGlobal, map[string]any{
+		"options.debug":  true,
+		"options.custom": "value",
+	}))
+	awaitConfigChanged(t, evc, ws.ID)
+}
+
 func TestRemoveConfigField_PublishesConfigChanged(t *testing.T) {
 	b, ws, evc := newPublishingWorkspace(t)
 
@@ -95,6 +105,21 @@ func TestUpdatePreferredModel_PublishesConfigChanged(t *testing.T) {
 
 	model := config.SelectedModel{Provider: "openai", Model: "gpt-4"}
 	require.NoError(t, b.UpdatePreferredModel(ws.ID, config.ScopeGlobal, config.SelectedModelTypeLarge, model))
+	awaitConfigChanged(t, evc, ws.ID)
+}
+
+func TestUpdatePreferredModels_PublishesConfigChanged(t *testing.T) {
+	if raceEnabled {
+		t.Skip("skipped under -race: pre-existing race between ConfigStore writes and agent coordinator startup")
+	}
+	b, ws, evc := newPublishingWorkspace(t)
+
+	large := config.SelectedModel{Provider: "openai", Model: "gpt-5"}
+	small := config.SelectedModel{Provider: "openai", Model: "gpt-5-mini"}
+	require.NoError(t, b.UpdatePreferredModels(ws.ID, config.ScopeGlobal, map[config.SelectedModelType]*config.SelectedModel{
+		config.SelectedModelTypeLarge: &large,
+		config.SelectedModelTypeSmall: &small,
+	}))
 	awaitConfigChanged(t, evc, ws.ID)
 }
 

@@ -49,11 +49,16 @@ type MCPResourceContents struct {
 // SetConfigField sets a key/value pair in the config file for the
 // given scope.
 func (b *Backend) SetConfigField(workspaceID string, scope config.Scope, key string, value any) error {
+	return b.SetConfigFields(workspaceID, scope, map[string]any{key: value})
+}
+
+// SetConfigFields sets multiple config fields in one file mutation.
+func (b *Backend) SetConfigFields(workspaceID string, scope config.Scope, fields map[string]any) error {
 	ws, err := b.GetWorkspace(workspaceID)
 	if err != nil {
 		return err
 	}
-	if err := ws.Cfg.SetConfigField(scope, key, value); err != nil {
+	if err := ws.Cfg.SetConfigFields(scope, fields); err != nil {
 		return err
 	}
 	publishConfigChanged(ws)
@@ -77,11 +82,16 @@ func (b *Backend) RemoveConfigField(workspaceID string, scope config.Scope, key 
 // UpdatePreferredModel updates the preferred model for the given type
 // and persists it to the config file at the given scope.
 func (b *Backend) UpdatePreferredModel(workspaceID string, scope config.Scope, modelType config.SelectedModelType, model config.SelectedModel) error {
+	return b.UpdatePreferredModels(workspaceID, scope, map[config.SelectedModelType]*config.SelectedModel{modelType: &model})
+}
+
+// UpdatePreferredModels atomically sets or removes multiple preferred models.
+func (b *Backend) UpdatePreferredModels(workspaceID string, scope config.Scope, models map[config.SelectedModelType]*config.SelectedModel) error {
 	ws, err := b.GetWorkspace(workspaceID)
 	if err != nil {
 		return err
 	}
-	if err := ws.Cfg.UpdatePreferredModel(scope, modelType, model); err != nil {
+	if err := ws.Cfg.UpdatePreferredModels(scope, models); err != nil {
 		return err
 	}
 	publishConfigChanged(ws)

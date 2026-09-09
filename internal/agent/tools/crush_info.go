@@ -15,7 +15,7 @@ import (
 	"github.com/charmbracelet/crush/internal/skills"
 )
 
-const CrushInfoToolName = "crush_info"
+const CrushInfoToolName = "tack_info"
 
 //go:embed crush_info.md
 var crushInfoDescription string

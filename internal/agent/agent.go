@@ -10,8 +10,10 @@ package agent
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +40,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/agent/hyper"
 	"github.com/charmbracelet/crush/internal/agent/notify"
+	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
@@ -57,7 +61,34 @@ const (
 	largeContextWindowThreshold = 200_000
 	largeContextWindowBuffer    = 20_000
 	smallContextWindowRatio     = 0.2
+	// Long-context models degrade before they exhaust their advertised window.
+	// Compact proactively once the live session reaches 128K tokens, while
+	// preserving the existing output reserve for models whose safe limit is
+	// smaller than 128K.
+	proactiveAutoCompactLimit = 128_000
 )
+
+// autoSummarizeTokenLimit returns the amount of live context that may be used
+// before automatic summarization stops the current agent loop. A zero context
+// window remains opt-out for custom/local models whose capacity is unknown.
+func autoSummarizeTokenLimit(contextWindow int64) int64 {
+	if contextWindow <= 0 {
+		return 0
+	}
+
+	reserve := int64(float64(contextWindow) * smallContextWindowRatio)
+	if contextWindow > largeContextWindowThreshold {
+		reserve = largeContextWindowBuffer
+	}
+	safeLimit := contextWindow - reserve
+	if safeLimit <= 0 {
+		return 0
+	}
+	if safeLimit > proactiveAutoCompactLimit {
+		return proactiveAutoCompactLimit
+	}
+	return safeLimit
+}
 
 var userAgent = fmt.Sprintf("Charm-Crush/%s (https://charm.land/crush)", version.Version)
 
@@ -73,6 +104,11 @@ var (
 	orphanThinkTagRegex = regexp.MustCompile(`</?think>`)
 )
 
+func reviewInputBudgetReached(used, budget int64) bool {
+	return budget > 0 && used >= budget
+}
+
+// MaxInputTokens is an optional aggregate input budget for a single run.
 type SessionAgentCall struct {
 	SessionID string
 	// RunID, when non-empty, is the caller-supplied correlator that
@@ -87,6 +123,7 @@ type SessionAgentCall struct {
 	Prompt           string
 	ProviderOptions  fantasy.ProviderOptions
 	Attachments      []message.Attachment
+	MaxInputTokens   int64
 	MaxOutputTokens  int64
 	Temperature      *float64
 	TopP             *float64
@@ -107,6 +144,7 @@ type SessionAgentCall struct {
 	// recursion drains, so falling back to the default broker
 	// publish keeps the event visible to subscribers.
 	OnComplete func(notify.RunComplete)
+	Trace      *RunTrace
 	// Accepted, when non-nil, is the accept reservation taken by
 	// BeginAccepted before the call was dispatched onto a goroutine
 	// (the client/server fire-and-forget path). Run consumes it under
@@ -138,6 +176,11 @@ type SessionAgent interface {
 	SetModels(large Model, small Model)
 	SetTools(tools []fantasy.AgentTool)
 	SetSystemPrompt(systemPrompt string)
+	// SetPromptBuild publishes one complete prompt construction: the
+	// rendered text plus the stable/dynamic split and the labeled
+	// generation used for change-reason diffs. SetSystemPrompt remains
+	// the string-only form (no split, no generation).
+	SetPromptBuild(build prompt.PromptBuild)
 	Cancel(sessionID string)
 	CancelAll()
 	IsSessionBusy(sessionID string) bool
@@ -151,10 +194,11 @@ type SessionAgent interface {
 }
 
 type Model struct {
-	Model      fantasy.LanguageModel
-	CatwalkCfg catwalk.Model
-	ModelCfg   config.SelectedModel
-	FlatRate   bool
+	Model               fantasy.LanguageModel
+	CatwalkCfg          catwalk.Model
+	ModelCfg            config.SelectedModel
+	FlatRate            bool
+	OmitMaxOutputTokens bool
 }
 
 // activeCancel wraps a context.CancelFunc with a unique pointer identity.
@@ -171,7 +215,21 @@ type sessionAgent struct {
 	smallModel         *csync.Value[Model]
 	systemPromptPrefix *csync.Value[string]
 	systemPrompt       *csync.Value[string]
-	tools              *csync.Slice[fantasy.AgentTool]
+	promptParts *csync.Value[prompt.Snapshot]
+	tools       *csync.Slice[fantasy.AgentTool]
+
+	// generationMu guards the prompt build generation and the per-run
+	// change-reason baselines. SetPromptBuild publishes the current
+	// generation; each run swaps in its current generation and
+	// tool/mcp/todo digests and diffs against the previous run's, so
+	// reasons come from generation diffs, never from comparing final
+	// hashes.
+	generationMu      sync.Mutex
+	currentGeneration *prompt.Generation
+	lastGeneration    *prompt.Generation
+	lastToolDigest    string
+	lastMCPDigest     string
+	lastTodoDigest    string
 
 	isSubAgent           bool
 	sessions             session.Service
@@ -245,6 +303,7 @@ func NewSessionAgent(
 		smallModel:           csync.NewValue(opts.SmallModel),
 		systemPromptPrefix:   csync.NewValue(opts.SystemPromptPrefix),
 		systemPrompt:         csync.NewValue(opts.SystemPrompt),
+		promptParts:          csync.NewValue(prompt.Snapshot{}),
 		isSubAgent:           opts.IsSubAgent,
 		sessions:             opts.Sessions,
 		messages:             opts.Messages,
@@ -567,6 +626,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	if err := ValidateCall(call); err != nil {
 		return nil, err
 	}
+	trace := call.Trace
+	if trace == nil {
+		trace = newRunTrace(call.RunID)
+	}
 
 	// genCtx/cancel are the run context and its cancel func, created under
 	// the per-session dispatch mutex below so a concurrent Cancel can observe
@@ -607,6 +670,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			SessionID: call.SessionID,
 			RunID:     call.RunID,
 			Cancelled: true,
+			Telemetry: trace.Snapshot(),
 		}
 		if err := a.persistCanceledTurn(ctx, call, false); err != nil {
 			complete.Error = err.Error()
@@ -661,9 +725,23 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	largeModel := a.largeModel.Get()
 	systemPrompt := a.systemPrompt.Get()
 	promptPrefix := a.systemPromptPrefix.Get()
-	var instructions strings.Builder
+	historyStarted := trace.StartSpan()
+	currentSession, err := a.sessions.Get(ctx, call.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
 
-	for _, server := range mcp.GetStates() {
+	runSystemPrompt := systemPrompt
+
+	var instructions strings.Builder
+	states := mcp.GetStates()
+	serverNames := make([]string, 0, len(states))
+	for name := range states {
+		serverNames = append(serverNames, name)
+	}
+	slices.Sort(serverNames)
+	for _, name := range serverNames {
+		server := states[name]
 		if server.State != mcp.StateConnected {
 			continue
 		}
@@ -674,7 +752,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	}
 
 	if s := instructions.String(); s != "" {
-		systemPrompt += "\n\n<mcp-instructions>\n" + s + "\n</mcp-instructions>"
+		runSystemPrompt += "\n\n<mcp-instructions>\n" + s + "\n</mcp-instructions>"
 	}
 
 	if len(agentTools) > 0 {
@@ -684,21 +762,17 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	agent := fantasy.NewAgent(
 		largeModel.Model,
-		fantasy.WithSystemPrompt(systemPrompt),
+		fantasy.WithSystemPrompt(runSystemPrompt),
 		fantasy.WithTools(agentTools...),
 		fantasy.WithUserAgent(userAgent),
 	)
 
 	sessionLock := sync.Mutex{}
-	currentSession, err := a.sessions.Get(ctx, call.SessionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get session: %w", err)
-	}
-
 	msgs, err := a.getSessionMessages(ctx, currentSession)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session messages: %w", err)
 	}
+	trace.EndSpan("history_load", historyStarted)
 
 	// Generate title from the first real (non-shell) user prompt.
 	// can take tens of seconds. Blocking Run on it delays the
@@ -760,6 +834,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return
 		}
 		complete := notify.RunComplete{SessionID: call.SessionID, RunID: call.RunID}
+		complete.Telemetry = trace.Snapshot()
 		if currentAssistant != nil {
 			complete.MessageID = currentAssistant.ID
 			complete.Text = currentAssistant.Content().String()
@@ -780,19 +855,44 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		a.publishRunComplete(ctx, call, complete)
 	}()
 
-	history, files := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages, call.Attachments...)
+	promptStarted := trace.StartSpan()
+	history, files, promptErr := a.preparePromptForModel(
+		msgs,
+		largeModel.CatwalkCfg.SupportsImages,
+		largeModel.ModelCfg.Provider,
+		largeModel.ModelCfg.Model,
+		call.Attachments...,
+	)
+	if promptErr != nil {
+		// Deterministic pre-network validation failure: no provider
+		// request is attempted for malformed history.
+		return nil, promptErr
+	}
+	trace.EndSpan("prompt_prepare", promptStarted)
+
+	// Record the per-run change reasons from generation diffs: stable
+	// components (model/template/context/skills) come from the prompt
+	// build generation, the tool set and the MCP instruction block are
+	// diffed per run. Reasons never come from comparing final hashes.
+	a.recordChangeReasons(trace, agentTools, instructions.String())
+	// The dynamic suffix of the system prompt covers the rendered dynamic
+	// template section plus the per-run MCP instruction block; the
+	// stable prefix is the unchanged stable template section.
+	if parts := a.promptParts.Get(); parts.StablePrefix != "" || parts.DynamicSuffix != "" {
+		trace.SetPromptParts(parts.StablePrefix, parts.DynamicSuffix+mcpInstructionBlock(instructions.String()))
+	}
 
 	startTime := time.Now()
 	a.eventPromptSent(call.SessionID)
 
 	var stepMessages []fantasy.Message
 	var shouldSummarize bool
+	var aggregateInputTokens int64
 	sanitizedToolCalls := make(map[string]bool)
-	// Don't send MaxOutputTokens if 0 — some providers (e.g. LM Studio) reject it
-	var maxOutputTokens *int64
-	if call.MaxOutputTokens > 0 {
-		maxOutputTokens = &call.MaxOutputTokens
-	}
+	// Don't send MaxOutputTokens if 0, or when the selected backend does not
+	// accept the field (notably ChatGPT's subscription-backed Codex endpoint).
+	maxOutputTokens := maxOutputTokensForModel(largeModel, call.MaxOutputTokens)
+	streamStarted := trace.StartSpan()
 	result, err = agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:           message.PromptWithTextAttachments(call.Prompt, call.Attachments),
 		Files:            files,
@@ -809,6 +909,24 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			prepared.Messages = options.Messages
 			for i := range prepared.Messages {
 				prepared.Messages[i].ProviderOptions = nil
+			}
+
+			// The todo reminder is ephemeral user-role context placed after
+			// the system prefix. It is re-rendered from a fresh session
+			// snapshot at every model-call boundary so tool updates within
+			// the same run reach the next request; it is never persisted and
+			// never becomes system policy.
+			if !a.isSubAgent {
+				snapshot, todoErr := a.sessions.Get(callContext, call.SessionID)
+				if todoErr != nil {
+					return callContext, prepared, fmt.Errorf("failed to get session: %w", todoErr)
+				}
+				prepared.Messages = insertTodoReminder(prepared.Messages, snapshot.Todos)
+				// The todo reminder is ephemeral dynamic context; a
+				// changed rendering between runs is recorded as a
+				// dynamic-only "todo" reason and never moves the stable
+				// prefix generation.
+				a.diffTodoDigest(trace, renderTodoReminder(snapshot.Todos))
 			}
 
 			// Use latest tools (updated by SetTools when MCP tools change).
@@ -857,6 +975,19 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(promptPrefix)}, prepared.Messages...)
 			}
 
+			// Every request transformation that reaches the wire has
+			// happened by here: prompt/history preparation, the todo
+			// reminder, queued-prompt folding, provider media
+			// workarounds, cache-control options and the prompt prefix.
+			// The final request fingerprint is therefore taken from this
+			// exact state; multi-step runs overwrite, so the last
+			// request of the run wins.
+			trace.FingerprintFinalRequest(a.buildRequestShape(
+				promptPrefix, runSystemPrompt, call.Prompt, call.Attachments,
+				prepared.Messages, prepared.Tools,
+				largeModel.ModelCfg.Provider, largeModel.ModelCfg.Model,
+			))
+
 			sessionLock.Lock()
 			stepMessages = cloneFantasyMessages(prepared.Messages)
 			sessionLock.Unlock()
@@ -878,11 +1009,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return callContext, prepared, err
 		},
 		OnReasoningStart: func(id string, reasoning fantasy.ReasoningContent) error {
-			currentAssistant.AppendReasoningContent(reasoning.Text)
+			trace.MarkFirstSemantic("reasoning")
+			currentAssistant.AppendReasoningContentForID(id, reasoning.Text)
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnReasoningDelta: func(id string, text string) error {
-			currentAssistant.AppendReasoningContent(text)
+			currentAssistant.AppendReasoningContentForID(id, text)
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnReasoningEnd: func(id string, reasoning fantasy.ReasoningContent) error {
@@ -899,13 +1031,14 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			}
 			if openaiData, ok := reasoning.ProviderMetadata[openai.Name]; ok {
 				if reasoning, ok := openaiData.(*openai.ResponsesReasoningMetadata); ok {
-					currentAssistant.SetReasoningResponsesData(reasoning)
+					currentAssistant.SetReasoningResponsesDataForID(id, reasoning)
 				}
 			}
-			currentAssistant.FinishThinking()
+			currentAssistant.FinishThinkingForID(id)
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnTextDelta: func(id string, text string) error {
+			trace.MarkFirstSemantic("text")
 			// Strip leading newline from initial text content. This is is
 			// particularly important in non-interactive mode where leading
 			// newlines are very visible.
@@ -917,6 +1050,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnToolInputStart: func(id string, toolName string) error {
+			trace.MarkFirstSemantic("tool_call")
 			toolCall := message.ToolCall{
 				ID:               id,
 				Name:             toolName,
@@ -929,6 +1063,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return a.messages.Update(ctx, *currentAssistant)
 		},
 		OnRetry: func(err *fantasy.ProviderError, delay time.Duration) {
+			trace.RecordRetry(delay)
 			slog.Warn("Provider request failed, retrying", providerRetryLogFields(err, delay)...)
 			// Reset streamed content so the retried response doesn't
 			// concatenate with partial content from the failed attempt.
@@ -981,6 +1116,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return createMsgErr
 		},
 		OnStepFinish: func(stepResult fantasy.StepResult) error {
+			trace.RecordStep()
 			for _, w := range stepResult.Warnings {
 				slog.Warn("Provider warning", "type", w.Type, "message", w.Message)
 			}
@@ -1025,6 +1161,16 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				return getSessionErr
 			}
 			usage, estimated := fallbackStepUsage(stepMessages, stepResult)
+			if call.MaxInputTokens > 0 && !estimated && usage.InputTokens > 0 {
+				aggregateInputTokens += usage.InputTokens
+			}
+			// Provider-reported cache usage feeds the tri-state cache
+			// status; estimated or absent usage leaves it unreported.
+			if !estimated && !usageIsZero(usage) {
+				cached := usage.CacheReadTokens
+				uncached := usage.InputTokens
+				trace.RecordCacheUsage(&cached, &uncached)
+			}
 			a.updateSessionUsage(largeModel, &updatedSession, usage, a.openrouterCost(stepResult.ProviderMetadata), estimated)
 			extractHyperCredits(stepResult.ProviderMetadata)
 			_, sessionErr := a.sessions.Save(ctx, updatedSession)
@@ -1034,23 +1180,24 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			currentSession = updatedSession
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
+		OnChunk: func(_ fantasy.StreamPart) error {
+			// EndSpan is one-shot per span name, so this records exactly the
+			// first stream part of the run and later parts are no-ops.
+			// Without a Fantasy transport hook the raw socket first byte is
+			// not observable from here; this span is therefore the practical
+			// request-issued-to-first-stream-event latency.
+			trace.EndSpan("request_write_to_first_byte", streamStarted)
+			return nil
+		},
 		StopWhen: []fantasy.StopCondition{
 			func(_ []fantasy.StepResult) bool {
 				cw := int64(largeModel.CatwalkCfg.ContextWindow)
-				// If context window is unknown (0), skip auto-summarize
-				// to avoid immediately truncating custom/local models.
-				if cw == 0 {
+				limit := autoSummarizeTokenLimit(cw)
+				if limit == 0 {
 					return false
 				}
 				tokens := currentSession.CompletionTokens + currentSession.PromptTokens
-				remaining := cw - tokens
-				var threshold int64
-				if cw > largeContextWindowThreshold {
-					threshold = largeContextWindowBuffer
-				} else {
-					threshold = int64(float64(cw) * smallContextWindowRatio)
-				}
-				if (remaining <= threshold) && !a.disableAutoSummarize {
+				if tokens >= limit && !a.disableAutoSummarize {
 					shouldSummarize = true
 					return true
 				}
@@ -1059,8 +1206,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			func(steps []fantasy.StepResult) bool {
 				return hasRepeatedToolCalls(steps, loopDetectionWindowSize, loopDetectionMaxRepeats)
 			},
+			func(_ []fantasy.StepResult) bool {
+				return reviewInputBudgetReached(aggregateInputTokens, call.MaxInputTokens)
+			},
 		},
 	})
+	trace.EndSpan("stream", streamStarted)
 
 	a.eventPromptResponded(call.SessionID, time.Since(startTime).Truncate(time.Second))
 
@@ -1190,6 +1341,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	}
 
 	if shouldSummarize {
+		trace.SetCompacted()
 		a.activeRequests.Del(call.SessionID)
 		if summarizeErr := a.Summarize(genCtx, call.SessionID, call.ProviderOptions, call.OnAuthRefresh); summarizeErr != nil {
 			return nil, summarizeErr
@@ -1314,6 +1466,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	mu.Unlock()
 	if outerOwesRunComplete {
 		complete := notify.RunComplete{SessionID: call.SessionID, RunID: call.RunID}
+		complete.Telemetry = trace.Snapshot()
 		if currentAssistant != nil {
 			complete.MessageID = currentAssistant.ID
 			complete.Text = currentAssistant.Content().String()
@@ -1348,7 +1501,10 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return nil
 	}
 
-	aiMsgs, _ := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages)
+	aiMsgs, _, err := a.preparePromptForModel(msgs, largeModel.CatwalkCfg.SupportsImages, largeModel.ModelCfg.Provider, largeModel.ModelCfg.Model)
+	if err != nil {
+		return err
+	}
 
 	genCtx, cancel := context.WithCancel(ctx)
 	ac := &activeCancel{cancel: cancel}
@@ -1524,18 +1680,12 @@ func (a *sessionAgent) createUserMessage(ctx context.Context, call SessionAgentC
 	return msg, nil
 }
 
-func (a *sessionAgent) preparePrompt(msgs []message.Message, supportsImages bool, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart) {
+func (a *sessionAgent) preparePrompt(msgs []message.Message, supportsImages bool, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart, error) {
+	return a.preparePromptForModel(msgs, supportsImages, "", "", attachments...)
+}
+
+func (a *sessionAgent) preparePromptForModel(msgs []message.Message, supportsImages bool, provider, modelID string, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart, error) {
 	var history []fantasy.Message
-	if !a.isSubAgent {
-		history = append(history, fantasy.NewUserMessage(
-			fmt.Sprintf(
-				"<system_reminder>%s</system_reminder>",
-				`This is a reminder that your todo list is currently empty. DO NOT mention this to the user explicitly because they are already aware.
-If you are working on tasks that would benefit from a todo list please use the "todos" tool to create one.
-If not, please feel free to ignore. Again do not mention this message to the user.`,
-			),
-		))
-	}
 	// Collect all tool call IDs present in assistant messages and all tool
 	// result IDs present in tool messages. This lets us detect both orphaned
 	// tool results (result without a call) and orphaned tool calls (call
@@ -1555,12 +1705,16 @@ If not, please feel free to ignore. Again do not mention this message to the use
 		}
 	}
 
+	// seenResponsesItemIDs enforces the per-request rule that every
+	// Responses reasoning item_id is replayed at most once across ALL
+	// assistant messages in the request.
+	seenResponsesItemIDs := make(map[string]struct{})
 	for _, m := range msgs {
 		if len(m.Parts) == 0 {
 			continue
 		}
 		// Assistant message without content or tool calls (cancelled before it returned anything).
-		if m.Role == message.Assistant && len(m.ToolCalls()) == 0 && m.Content().Text == "" && m.ReasoningContent().String() == "" {
+		if m.Role == message.Assistant && len(m.ToolCalls()) == 0 && m.Content().Text == "" && len(m.ReasoningContents()) == 0 {
 			continue
 		}
 		if m.Role == message.Tool {
@@ -1568,6 +1722,16 @@ If not, please feel free to ignore. Again do not mention this message to the use
 				history = append(history, msg)
 			}
 			continue
+		}
+		if provider != "" && m.Role == message.Assistant && (m.Provider != provider || m.Model != modelID) {
+			m = withoutResponsesReasoning(m)
+		}
+		// Each Responses reasoning item_id may be replayed at most once
+		// per request. A duplicate would corrupt the ordered reasoning
+		// stream, so it is a deterministic pre-network validation error
+		// rather than something to silently dedupe.
+		if err := collectResponsesItemIDs(m, seenResponsesItemIDs); err != nil {
+			return nil, nil, err
 		}
 		aiMsgs := m.ToAIMessage()
 		if !supportsImages {
@@ -1601,7 +1765,149 @@ If not, please feel free to ignore. Again do not mention this message to the use
 		})
 	}
 
-	return history, files
+	return history, files, nil
+}
+
+// collectResponsesItemIDs records every Responses reasoning item_id in
+// the message and rejects a duplicate anywhere in the request with a
+// deterministic pre-network error. The item ID is opaque metadata; it is
+// never echoed with ciphertext content.
+func collectResponsesItemIDs(m message.Message, seen map[string]struct{}) error {
+	for _, part := range m.Parts {
+		reasoning, ok := part.(message.ReasoningContent)
+		if !ok || reasoning.ResponsesData == nil {
+			continue
+		}
+		itemID := reasoning.ResponsesData.ItemID
+		if itemID == "" {
+			continue
+		}
+		if _, exists := seen[itemID]; exists {
+			return fmt.Errorf("duplicate reasoning item_id in request history; refusing to send the request (item index in message %s)", m.ID)
+		}
+		seen[itemID] = struct{}{}
+	}
+	return nil
+}
+
+func withoutResponsesReasoning(msg message.Message) message.Message {
+	clone := msg.Clone()
+	for index, part := range clone.Parts {
+		reasoning, ok := part.(message.ReasoningContent)
+		if !ok || reasoning.ResponsesData == nil {
+			continue
+		}
+		reasoning.ResponsesData = nil
+		clone.Parts[index] = reasoning
+	}
+	return clone
+}
+
+const (
+	maxTodoReminderTasks = 64
+	maxTodoReminderBytes = 16 * 1024
+	// todoReminderOverheadBytes covers the opening wrapper, the closing
+	// wrapper, and the worst-case truncation/omitted/total/state markers
+	// that follow the rendered items, so the finished reminder is always
+	// within maxTodoReminderBytes.
+	todoReminderOverheadBytes = 256
+)
+
+var todoXMLReplacer = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	"\"", "&quot;",
+	"'", "&apos;",
+)
+
+// insertTodoReminder places a fresh ephemeral user-role todo reminder after
+// the leading system messages. Pure over its inputs; the caller owns the
+// session snapshot so the rendered revision and the messages stay consistent.
+func insertTodoReminder(messages []fantasy.Message, todos []session.Todo) []fantasy.Message {
+	reminder := fantasy.NewUserMessage(renderTodoReminder(todos))
+	insert := 0
+	for insert < len(messages) && messages[insert].Role == fantasy.MessageRoleSystem {
+		insert++
+	}
+	updated := make([]fantasy.Message, 0, len(messages)+1)
+	updated = append(updated, messages[:insert]...)
+	updated = append(updated, reminder)
+	updated = append(updated, messages[insert:]...)
+	return updated
+}
+
+// renderTodoReminder renders the session's todo snapshot as ephemeral
+// engine-state context. Task order follows the session's deterministic
+// slice order (never re-sorted: status ordering would erase the model's
+// priority). The whole list is summarized with total and omitted status
+// counts so truncated or completed tasks cannot hide active work, and a
+// non-empty list is never described as empty.
+func renderTodoReminder(todos []session.Todo) string {
+	var body strings.Builder
+	body.WriteString(`<system_reminder><todos source="engine-state">`)
+	if len(todos) == 0 {
+		body.WriteString("<state>empty</state><instruction>Use the todos tool when task tracking would help.</instruction>")
+	} else {
+		allCompleted := true
+		statusCounts := make(map[string]int, 3)
+		for _, todo := range todos {
+			if todo.Status != session.TodoStatusCompleted {
+				allCompleted = false
+			}
+			statusCounts[string(todo.Status)]++
+		}
+
+		rendered := 0
+		for _, todo := range todos {
+			if rendered >= maxTodoReminderTasks {
+				break
+			}
+			item := fmt.Sprintf("<todo status=\"%s\">%s</todo>", todoXMLReplacer.Replace(string(todo.Status)), todoXMLReplacer.Replace(todo.Content))
+			// The byte cap covers XML escaping (item is already escaped)
+			// and the fixed wrapper/marker overhead; whole items are
+			// dropped, never split mid-UTF-8.
+			if body.Len()+len(item)+todoReminderOverheadBytes > maxTodoReminderBytes {
+				break
+			}
+			body.WriteString(item)
+			rendered++
+		}
+		if omitted := len(todos) - rendered; omitted > 0 {
+			body.WriteString("<truncated>true</truncated>")
+			fmt.Fprintf(&body, "<omitted>%d</omitted>", omitted)
+			omittedCounts := make([]string, 0, len(statusCounts))
+			remaining := make(map[string]int, len(statusCounts))
+			for _, todo := range todos[rendered:] {
+				remaining[string(todo.Status)]++
+			}
+			for _, status := range sortedStatusNames(remaining) {
+				omittedCounts = append(omittedCounts, fmt.Sprintf("%s=%d", status, remaining[status]))
+			}
+			body.WriteString("<omitted-status ")
+			body.WriteString(strings.Join(omittedCounts, " "))
+			body.WriteString("/>")
+		}
+		fmt.Fprintf(&body, "<total>%d</total>", len(todos))
+		if allCompleted {
+			body.WriteString("<state>all-completed</state>")
+		} else {
+			body.WriteString("<state>active</state>")
+		}
+	}
+	body.WriteString("</todos></system_reminder>")
+	return body.String()
+}
+
+// sortedStatusNames returns the map's keys in lexical order so the
+// omitted-status summary is deterministic.
+func sortedStatusNames(counts map[string]int) []string {
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // filterFileParts removes fantasy.FilePart entries from a slice of message
@@ -1692,20 +1998,7 @@ func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.S
 		return nil, fmt.Errorf("failed to list messages: %w", err)
 	}
 
-	if session.SummaryMessageID != "" {
-		summaryMsgIndex := -1
-		for i, msg := range msgs {
-			if msg.ID == session.SummaryMessageID {
-				summaryMsgIndex = i
-				break
-			}
-		}
-		if summaryMsgIndex != -1 {
-			msgs = msgs[summaryMsgIndex:]
-			msgs[0].Role = message.User
-		}
-	}
-	return msgs, nil
+	return selectHistoryWithAnchor(msgs, session.SummaryMessageID), nil
 }
 
 // hasUserTextMessage reports whether any user message in msgs contains
@@ -1747,13 +2040,15 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 	largeModel := a.largeModel.Get()
 	systemPromptPrefix := a.systemPromptPrefix.Get()
 
-	newAgent := func(m fantasy.LanguageModel, p []byte, tok int64) fantasy.Agent {
-		return fantasy.NewAgent(
-			m,
-			fantasy.WithSystemPrompt(string(p)+"\n /no_think"),
-			fantasy.WithMaxOutputTokens(tok),
+	newAgent := func(m Model, p []byte, tok int64) fantasy.Agent {
+		opts := []fantasy.AgentOption{
+			fantasy.WithSystemPrompt(string(p) + "\n /no_think"),
 			fantasy.WithUserAgent(userAgent),
-		)
+		}
+		if maxOutputTokens := maxOutputTokensForModel(m, tok); maxOutputTokens != nil {
+			opts = append(opts, fantasy.WithMaxOutputTokens(*maxOutputTokens))
+		}
+		return fantasy.NewAgent(m.Model, opts...)
 	}
 
 	streamCall := fantasy.AgentStreamCall{
@@ -1788,7 +2083,7 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 		if attempt.model.CatwalkCfg.CanReason {
 			tok = attempt.model.CatwalkCfg.DefaultMaxTokens
 		}
-		agent := newAgent(attempt.model.Model, titlePrompt, tok)
+		agent := newAgent(attempt.model, titlePrompt, tok)
 		resp, err = agent.Stream(ctx, streamCall)
 		if err == nil && resp.Response.FinishReason != fantasy.FinishReasonLength {
 			model = attempt.model
@@ -2080,7 +2375,175 @@ func (a *sessionAgent) SetTools(tools []fantasy.AgentTool) {
 }
 
 func (a *sessionAgent) SetSystemPrompt(systemPrompt string) {
-	a.systemPrompt.Set(systemPrompt)
+	a.SetPromptBuild(prompt.PromptBuild{Text: systemPrompt})
+}
+
+// SetPromptBuild publishes the complete prompt construction. The split
+// and generation travel with the text so every run diffs exactly the
+// inputs that produced its system prompt.
+func (a *sessionAgent) SetPromptBuild(build prompt.PromptBuild) {
+	a.systemPrompt.Set(build.Text)
+	a.promptParts.Set(build.Snapshot)
+	a.generationMu.Lock()
+	defer a.generationMu.Unlock()
+	a.currentGeneration = build.Generation
+}
+
+// mcpInstructionBlock renders the per-run MCP instruction block appended
+// to the system prompt; empty instructions yield an empty block.
+func mcpInstructionBlock(instructions string) string {
+	if instructions == "" {
+		return ""
+	}
+	return "\n\n<mcp-instructions>\n" + instructions + "\n</mcp-instructions>"
+}
+
+// recordChangeReasons diffs this run's prompt generation, tool set and
+// MCP instruction digests against the previous run's baselines and
+// records the resulting change reasons on the trace. The first
+// observation establishes the baseline and records no change.
+func (a *sessionAgent) recordChangeReasons(trace *RunTrace, tools []fantasy.AgentTool, instructions string) {
+	toolDigest := digestOfString(toolShapeDigestInput(tools))
+	mcpDigest := digestOfString(instructions)
+
+	a.generationMu.Lock()
+	defer a.generationMu.Unlock()
+	current := a.currentGeneration
+	var stableKinds, dynamicKinds []string
+	if current != nil {
+		stableKinds = current.ChangedStable(a.lastGeneration)
+		dynamicKinds = current.ChangedDynamic(a.lastGeneration)
+		a.lastGeneration = current
+	}
+	if a.lastToolDigest != "" && toolDigest != a.lastToolDigest {
+		stableKinds = append(stableKinds, "tool_set")
+	}
+	a.lastToolDigest = toolDigest
+	if a.lastMCPDigest != "" && mcpDigest != a.lastMCPDigest {
+		dynamicKinds = append(dynamicKinds, "mcp")
+	}
+	a.lastMCPDigest = mcpDigest
+	trace.RecordGenerationDiff(stableKinds, dynamicKinds)
+}
+
+// diffTodoDigest records a dynamic-only "todo" reason when the rendered
+// todo reminder differs from the previous run's rendering. It never
+// touches the stable generation.
+func (a *sessionAgent) diffTodoDigest(trace *RunTrace, rendered string) {
+	digest := digestOfString(rendered)
+	a.generationMu.Lock()
+	defer a.generationMu.Unlock()
+	if a.lastTodoDigest != "" && digest != a.lastTodoDigest {
+		trace.AddChangeReason("todo")
+	}
+	a.lastTodoDigest = digest
+}
+
+func digestOfString(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+// buildRequestShape assembles the sanitized projection of the final
+// prepared request that feeds the run fingerprint.
+func (a *sessionAgent) buildRequestShape(systemPrefix, systemPrompt, prompt string, attachments []message.Attachment, messages []fantasy.Message, tools []fantasy.AgentTool, provider, model string) requestShapeProjection {
+	names, schemas := toolShape(tools)
+	return requestShapeProjection{
+		SystemPrefix:    systemPrefix,
+		SystemPrompt:    systemPrompt,
+		Prompt:          prompt,
+		HistoryShape:    historyShape(messages),
+		ToolNames:       names,
+		ToolSchemas:     schemas,
+		AttachmentKinds: attachmentKinds(attachments),
+		AttachmentBytes: attachmentBytes(attachments),
+		Provider:        provider,
+		Model:           model,
+	}
+}
+
+// historyShape renders a deterministic, content-free shape of the final
+// request messages: per message, the role, byte totals for text parts,
+// tool-call arguments and file data, and bare counts for encrypted
+// reasoning items and tool results. Reasoning ciphertext and raw tool
+// output contribute counts only, never bytes or content.
+func historyShape(messages []fantasy.Message) string {
+	var b strings.Builder
+	for _, msg := range messages {
+		textBytes, callBytes, fileBytes := 0, 0, 0
+		reasoningCount, resultCount := 0, 0
+		for _, part := range msg.Content {
+			switch content := part.(type) {
+			case fantasy.TextPart:
+				textBytes += len(content.Text)
+			case fantasy.ReasoningPart:
+				reasoningCount++
+			case fantasy.ToolCallPart:
+				callBytes += len(content.Input)
+			case fantasy.ToolResultPart:
+				resultCount++
+			case fantasy.FilePart:
+				fileBytes += len(content.Data)
+			}
+		}
+		fmt.Fprintf(&b, "%s;text=%d;call=%d;file=%d;reasoning=%d;result=%d\n",
+			msg.Role, textBytes, callBytes, fileBytes, reasoningCount, resultCount)
+	}
+	return b.String()
+}
+
+// toolShape returns the sorted tool names and a deterministic schema
+// digest input per tool. json.Marshal sorts map keys, so the parameter
+// schema serialization is canonical across runs.
+func toolShape(tools []fantasy.AgentTool) ([]string, []string) {
+	type entry struct{ name, schema string }
+	entries := make([]entry, 0, len(tools))
+	for _, tool := range tools {
+		info := tool.Info()
+		payload, err := json.Marshal(struct {
+			Description string         `json:"description"`
+			Parameters  map[string]any `json:"parameters"`
+			Required    []string       `json:"required"`
+		}{info.Description, info.Parameters, info.Required})
+		if err != nil {
+			payload = []byte("unserializable")
+		}
+		entries = append(entries, entry{info.Name, string(payload)})
+	}
+	slices.SortFunc(entries, func(x, y entry) int { return strings.Compare(x.name, y.name) })
+	names := make([]string, 0, len(entries))
+	schemas := make([]string, 0, len(entries))
+	for _, item := range entries {
+		names = append(names, item.name)
+		schemas = append(schemas, item.schema)
+	}
+	return names, schemas
+}
+
+func toolShapeDigestInput(tools []fantasy.AgentTool) string {
+	names, schemas := toolShape(tools)
+	return strings.Join(names, "\x00") + "\x01" + strings.Join(schemas, "\x00")
+}
+
+func attachmentKinds(attachments []message.Attachment) []string {
+	kinds := make([]string, 0, len(attachments))
+	for _, attachment := range attachments {
+		kind := attachment.MimeType
+		if kind == "" {
+			kind = "application/octet-stream"
+		}
+		kinds = append(kinds, kind)
+	}
+	slices.Sort(kinds)
+	return kinds
+}
+
+func attachmentBytes(attachments []message.Attachment) int64 {
+	var total int64
+	for _, attachment := range attachments {
+		total += int64(len(attachment.Content))
+	}
+	return total
 }
 
 func (a *sessionAgent) Model() Model {

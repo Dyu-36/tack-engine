@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
 	"github.com/charmbracelet/crush/internal/oauth/hyper"
+	openaioauth "github.com/charmbracelet/crush/internal/oauth/openai"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"golang.org/x/sync/singleflight"
@@ -119,7 +120,8 @@ type ConfigStore struct {
 	// It is a field so tests can substitute a fake exchange without making
 	// real network calls. Production code leaves it nil, and exchange falls
 	// back to the real provider clients.
-	exchangeToken func(ctx context.Context, providerID, refreshToken string) (*oauth.Token, error)
+	exchangeToken    func(ctx context.Context, providerID, refreshToken string) (*oauth.Token, error)
+	listOpenAIModels func(ctx context.Context, token *oauth.Token) ([]catwalk.Model, error)
 
 	// authSignalMu guards authSignals, which maps provider IDs to
 	// channels that WaitForTokenChange blocks on. SignalAuthComplete
@@ -328,13 +330,15 @@ func (s *ConfigStore) atomicWrite(scope Scope, fn func(current []byte) ([]byte, 
 // configPath returns the file path for the given scope.
 func (s *ConfigStore) configPath(scope Scope) (string, error) {
 	switch scope {
+	case ScopeGlobal:
+		return s.globalDataPath, nil
 	case ScopeWorkspace:
 		if s.workspacePath == "" {
 			return "", ErrNoWorkspaceConfig
 		}
 		return s.workspacePath, nil
 	default:
-		return s.globalDataPath, nil
+		return "", fmt.Errorf("%w: unsupported scope %d", ErrInvalidConfigMutation, scope)
 	}
 }
 
@@ -369,6 +373,9 @@ func (s *ConfigStore) SetConfigField(scope Scope, key string, value any) error {
 // The write is protected by an in-process mutex and a cross-process flock
 // to prevent races between concurrent writers in different processes.
 func (s *ConfigStore) SetConfigFields(scope Scope, kv map[string]any) error {
+	if err := validateConfigFields(kv); err != nil {
+		return err
+	}
 	if err := s.writeConfigFields(scope, kv); err != nil {
 		return err
 	}
@@ -389,25 +396,7 @@ func (s *ConfigStore) SetConfigFields(scope Scope, kv map[string]any) error {
 // (update). Both of those run under writeMu, which is what keeps the
 // snapshot map free of concurrent writers.
 func (s *ConfigStore) writeConfigFields(scope Scope, kv map[string]any) error {
-	// Sort keys for deterministic output regardless of map iteration
-	// order. This also ensures consistent results when callers pass
-	// overlapping JSONPath keys (e.g. "a" and "a.b").
-	keys := make([]string, 0, len(kv))
-	for k := range kv {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-
-	return s.atomicWrite(scope, func(data []byte) ([]byte, error) {
-		v := string(data)
-		for _, key := range keys {
-			var sErr error
-			if v, sErr = sjson.Set(v, key, kv[key]); sErr != nil {
-				return nil, fmt.Errorf("failed to set config field %s: %w", key, sErr)
-			}
-		}
-		return []byte(v), nil
-	})
+	return s.writeConfigChanges(scope, configChanges{set: kv})
 }
 
 // mutateInMemory applies a copy-on-write change to the config without
@@ -436,22 +425,9 @@ func (s *ConfigStore) update(scope Scope, mutate func(*Config) map[string]any) e
 
 // updateLocked is the lock-free core of update. Caller must hold writeMu.
 func (s *ConfigStore) updateLocked(scope Scope, mutate func(*Config) map[string]any) error {
-	nc := s.Config().cloneForWrite()
-	fields := mutate(nc)
-	s.setConfig(nc)
-	if len(fields) == 0 {
-		return nil
-	}
-	if err := s.writeConfigFields(scope, fields); err != nil {
-		return err
-	}
-	// Refresh the staleness snapshot so the file watcher does not treat
-	// our own write as an external change. Safe to touch the snapshot map
-	// here because we hold writeMu.
-	if path, err := s.configPath(scope); err == nil {
-		s.captureStalenessSnapshot(append(slices.Clone(s.loadedPaths), path))
-	}
-	return nil
+	return s.updateChangesLocked(scope, func(c *Config) configChanges {
+		return configChanges{set: mutate(c)}
+	})
 }
 
 // OverridePreferredModel sets the preferred model for the given type in
@@ -516,9 +492,7 @@ func (s *ConfigStore) RemoveConfigField(scope Scope, key string) error {
 // latency); agents are refreshed separately by the caller (see
 // UpdateAgentModel).
 func (s *ConfigStore) UpdatePreferredModel(scope Scope, modelType SelectedModelType, model SelectedModel) error {
-	return s.update(scope, func(c *Config) map[string]any {
-		return s.updatePreferredModelFields(c, modelType, model)
-	})
+	return s.UpdatePreferredModels(scope, map[SelectedModelType]*SelectedModel{modelType: &model})
 }
 
 // updatePreferredModelFields builds the fields map for persisting a preferred
@@ -565,6 +539,7 @@ func (s *ConfigStore) SetProviderAPIKey(scope Scope, providerID string, apiKey a
 	var providerConfig ProviderConfig
 	var exists bool
 	var setKeyOrToken func()
+	var oauthModels []catwalk.Model
 
 	switch v := apiKey.(type) {
 	case string:
@@ -573,24 +548,41 @@ func (s *ConfigStore) SetProviderAPIKey(scope Scope, providerID string, apiKey a
 		}
 		setKeyOrToken = func() { providerConfig.APIKey = v }
 	case *oauth.Token:
+		fields := map[string]any{
+			fmt.Sprintf("providers.%s.api_key", providerID): v.AccessToken,
+			fmt.Sprintf("providers.%s.oauth", providerID):   v,
+		}
+		if openaioauth.HasSubscriptionCredential(providerID, v) {
+			var err error
+			oauthModels, err = s.fetchOpenAIModels(context.Background(), v)
+			if err != nil {
+				return fmt.Errorf("fetch ChatGPT subscription models: %w", err)
+			}
+			fields[fmt.Sprintf("providers.%s.base_url", providerID)] = openaioauth.CodexBackendURL
+			fields[fmt.Sprintf("providers.%s.models", providerID)] = oauthModels
+			fields[fmt.Sprintf("providers.%s.discover_models", providerID)] = false
+			fields[fmt.Sprintf("providers.%s.flat_rate", providerID)] = true
+		}
 		// Hold the refresh lock across the write so a peer's in-flight
 		// token exchange cannot land on top of a credential the user just
 		// obtained interactively — which would silently invalidate the
 		// login they only just completed.
 		if err := s.withRefreshLock(providerID, func() error {
-			return s.SetConfigFields(scope, map[string]any{
-				fmt.Sprintf("providers.%s.api_key", providerID): v.AccessToken,
-				fmt.Sprintf("providers.%s.oauth", providerID):   v,
-			})
+			return s.SetConfigFields(scope, fields)
 		}); err != nil {
 			return err
 		}
 		setKeyOrToken = func() {
 			providerConfig.APIKey = v.AccessToken
 			providerConfig.OAuthToken = v
-			switch providerID {
-			case string(catwalk.InferenceProviderCopilot):
+			switch {
+			case providerID == string(catwalk.InferenceProviderCopilot):
 				providerConfig.SetupGitHubCopilot()
+			case openaioauth.HasSubscriptionCredential(providerID, v):
+				providerConfig.BaseURL = openaioauth.CodexBackendURL
+				providerConfig.Models = oauthModels
+				providerConfig.AutoDiscoverModels = boolPtr(false)
+				providerConfig.FlatRate = true
 			}
 		}
 	}
@@ -734,15 +726,32 @@ func (s *ConfigStore) refreshOAuthTokenLocked(ctx context.Context, scope Scope, 
 		return fmt.Errorf("failed to refresh OAuth token for provider %s: %w", providerID, refreshErr)
 	}
 
+	mergeOAuthTokenMetadata(refreshedToken, entryToken)
+	fields := map[string]any{
+		fmt.Sprintf("providers.%s.api_key", providerID): refreshedToken.AccessToken,
+		fmt.Sprintf("providers.%s.oauth", providerID):   refreshedToken,
+	}
+	if openaioauth.HasSubscriptionCredential(providerID, refreshedToken) {
+		providerConfig.BaseURL = openaioauth.CodexBackendURL
+		providerConfig.AutoDiscoverModels = boolPtr(false)
+		providerConfig.FlatRate = true
+		fields[fmt.Sprintf("providers.%s.base_url", providerID)] = openaioauth.CodexBackendURL
+		fields[fmt.Sprintf("providers.%s.discover_models", providerID)] = false
+		fields[fmt.Sprintf("providers.%s.flat_rate", providerID)] = true
+		if models, modelErr := s.fetchOpenAIModels(ctx, refreshedToken); modelErr != nil {
+			slog.Warn("Failed to refresh ChatGPT subscription model catalog", "error", modelErr)
+		} else {
+			providerConfig.Models = models
+			fields[fmt.Sprintf("providers.%s.models", providerID)] = models
+		}
+	}
+
 	slog.Info("Successfully refreshed OAuth token", "provider", providerID)
 	if err := s.applyToken(providerConfig, refreshedToken, providerID); err != nil {
 		return err
 	}
 
-	if err := s.SetConfigFields(scope, map[string]any{
-		fmt.Sprintf("providers.%s.api_key", providerID): refreshedToken.AccessToken,
-		fmt.Sprintf("providers.%s.oauth", providerID):   refreshedToken,
-	}); err != nil {
+	if err := s.SetConfigFields(scope, fields); err != nil {
 		return fmt.Errorf("failed to persist refreshed token: %w", err)
 	}
 	return nil
@@ -864,10 +873,12 @@ func (s *ConfigStore) exchange(ctx context.Context, providerID, refreshToken str
 	if s.exchangeToken != nil {
 		return s.exchangeToken(ctx, providerID, refreshToken)
 	}
-	switch providerID {
-	case string(catwalk.InferenceProviderCopilot):
+	switch {
+	case providerID == string(catwalk.InferenceProviderCopilot):
 		return copilot.RefreshToken(ctx, refreshToken)
-	case hyperp.Name:
+	case openaioauth.IsSubscriptionProvider(providerID):
+		return openaioauth.RefreshToken(ctx, refreshToken)
+	case providerID == hyperp.Name:
 		return hyper.ExchangeToken(ctx, refreshToken)
 	default:
 		return nil, fmt.Errorf("OAuth refresh not supported for provider %s", providerID)

@@ -2,6 +2,7 @@ package message
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -53,13 +54,40 @@ type ContentPart interface {
 }
 
 type ReasoningContent struct {
-	Thinking         string                             `json:"thinking"`
-	Signature        string                             `json:"signature"`
-	ThoughtSignature string                             `json:"thought_signature"` // Used for google
-	ToolID           string                             `json:"tool_id"`           // Used for openrouter google models
-	ResponsesData    *openai.ResponsesReasoningMetadata `json:"responses_data"`
-	StartedAt        int64                              `json:"started_at,omitempty"`
-	FinishedAt       int64                              `json:"finished_at,omitempty"`
+	EventID          string                  `json:"event_id,omitempty"`
+	Thinking         string                  `json:"thinking"`
+	Signature        string                  `json:"signature"`
+	ThoughtSignature string                  `json:"thought_signature"` // Used for google
+	ToolID           string                  `json:"tool_id"`           // Used for openrouter google models
+	ResponsesData    *ResponsesReasoningData `json:"responses_data"`
+	StartedAt        int64                   `json:"started_at,omitempty"`
+	FinishedAt       int64                   `json:"finished_at,omitempty"`
+}
+
+type ResponsesReasoningData struct {
+	ItemID           string   `json:"item_id"`
+	EncryptedContent *string  `json:"encrypted_content"`
+	Summary          []string `json:"summary"`
+}
+
+func (data *ResponsesReasoningData) UnmarshalJSON(raw []byte) error {
+	type plain ResponsesReasoningData
+	var direct plain
+	if err := json.Unmarshal(raw, &direct); err != nil {
+		return err
+	}
+	if direct.ItemID != "" || direct.EncryptedContent != nil || direct.Summary != nil {
+		*data = ResponsesReasoningData(direct)
+		return nil
+	}
+	var legacy struct {
+		Data plain `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return err
+	}
+	*data = ResponsesReasoningData(legacy.Data)
+	return nil
 }
 
 func (tc ReasoningContent) String() string {
@@ -196,6 +224,16 @@ func (m *Message) ReasoningContent() ReasoningContent {
 	return ReasoningContent{}
 }
 
+func (m *Message) ReasoningContents() []ReasoningContent {
+	var contents []ReasoningContent
+	for _, part := range m.Parts {
+		if content, ok := part.(ReasoningContent); ok {
+			contents = append(contents, content)
+		}
+	}
+	return contents
+}
+
 func (m *Message) ImageURLContent() []ImageURLContent {
 	imageURLContents := make([]ImageURLContent, 0)
 	for _, part := range m.Parts {
@@ -295,20 +333,31 @@ func (m *Message) AppendContent(delta string) {
 }
 
 func (m *Message) AppendReasoningContent(delta string) {
+	m.AppendReasoningContentForID("", delta)
+}
+
+func (m *Message) AppendReasoningContentForID(eventID, delta string) {
 	found := false
 	for i, part := range m.Parts {
-		if c, ok := part.(ReasoningContent); ok {
+		if c, ok := part.(ReasoningContent); ok && c.EventID == eventID {
+			c.Thinking += delta
 			m.Parts[i] = ReasoningContent{
-				Thinking:   c.Thinking + delta,
-				Signature:  c.Signature,
-				StartedAt:  c.StartedAt,
-				FinishedAt: c.FinishedAt,
+				EventID:          c.EventID,
+				Thinking:         c.Thinking,
+				Signature:        c.Signature,
+				ThoughtSignature: c.ThoughtSignature,
+				ToolID:           c.ToolID,
+				ResponsesData:    c.ResponsesData,
+				StartedAt:        c.StartedAt,
+				FinishedAt:       c.FinishedAt,
 			}
 			found = true
+			break
 		}
 	}
 	if !found {
 		m.Parts = append(m.Parts, ReasoningContent{
+			EventID:   eventID,
 			Thinking:  delta,
 			StartedAt: time.Now().Unix(),
 		})
@@ -318,14 +367,9 @@ func (m *Message) AppendReasoningContent(delta string) {
 func (m *Message) AppendThoughtSignature(signature string, toolCallID string) {
 	for i, part := range m.Parts {
 		if c, ok := part.(ReasoningContent); ok {
-			m.Parts[i] = ReasoningContent{
-				Thinking:         c.Thinking,
-				ThoughtSignature: c.ThoughtSignature + signature,
-				ToolID:           toolCallID,
-				Signature:        c.Signature,
-				StartedAt:        c.StartedAt,
-				FinishedAt:       c.FinishedAt,
-			}
+			c.ThoughtSignature += signature
+			c.ToolID = toolCallID
+			m.Parts[i] = c
 			return
 		}
 	}
@@ -335,12 +379,8 @@ func (m *Message) AppendThoughtSignature(signature string, toolCallID string) {
 func (m *Message) AppendReasoningSignature(signature string) {
 	for i, part := range m.Parts {
 		if c, ok := part.(ReasoningContent); ok {
-			m.Parts[i] = ReasoningContent{
-				Thinking:   c.Thinking,
-				Signature:  c.Signature + signature,
-				StartedAt:  c.StartedAt,
-				FinishedAt: c.FinishedAt,
-			}
+			c.Signature += signature
+			m.Parts[i] = c
 			return
 		}
 	}
@@ -348,29 +388,36 @@ func (m *Message) AppendReasoningSignature(signature string) {
 }
 
 func (m *Message) SetReasoningResponsesData(data *openai.ResponsesReasoningMetadata) {
+	m.SetReasoningResponsesDataForID("", data)
+}
+
+func (m *Message) SetReasoningResponsesDataForID(eventID string, data *openai.ResponsesReasoningMetadata) {
+	var stored *ResponsesReasoningData
+	if data != nil {
+		stored = &ResponsesReasoningData{ItemID: data.ItemID, EncryptedContent: data.EncryptedContent, Summary: append([]string(nil), data.Summary...)}
+	}
 	for i, part := range m.Parts {
-		if c, ok := part.(ReasoningContent); ok {
-			m.Parts[i] = ReasoningContent{
-				Thinking:      c.Thinking,
-				ResponsesData: data,
-				StartedAt:     c.StartedAt,
-				FinishedAt:    c.FinishedAt,
-			}
+		if c, ok := part.(ReasoningContent); ok && c.EventID == eventID {
+			c.ResponsesData = stored
+			m.Parts[i] = c
 			return
 		}
 	}
+	m.Parts = append(m.Parts, ReasoningContent{EventID: eventID, ResponsesData: stored, StartedAt: time.Now().Unix()})
 }
 
 func (m *Message) FinishThinking() {
+	for _, reasoning := range m.ReasoningContents() {
+		m.FinishThinkingForID(reasoning.EventID)
+	}
+}
+
+func (m *Message) FinishThinkingForID(eventID string) {
 	for i, part := range m.Parts {
-		if c, ok := part.(ReasoningContent); ok {
+		if c, ok := part.(ReasoningContent); ok && c.EventID == eventID {
 			if c.FinishedAt == 0 {
-				m.Parts[i] = ReasoningContent{
-					Thinking:   c.Thinking,
-					Signature:  c.Signature,
-					StartedAt:  c.StartedAt,
-					FinishedAt: time.Now().Unix(),
-				}
+				c.FinishedAt = time.Now().Unix()
+				m.Parts[i] = c
 			}
 			return
 		}
@@ -576,36 +623,44 @@ func (m *Message) ToAIMessage() []fantasy.Message {
 		})
 	case Assistant:
 		var parts []fantasy.MessagePart
-		text := strings.TrimSpace(m.Content().Text)
-		if text != "" {
-			parts = append(parts, fantasy.TextPart{Text: text})
-		}
-		reasoning := m.ReasoningContent()
-		if reasoning.Thinking != "" {
-			reasoningPart := fantasy.ReasoningPart{Text: reasoning.Thinking, ProviderOptions: fantasy.ProviderOptions{}}
-			if reasoning.Signature != "" {
-				reasoningPart.ProviderOptions[anthropic.Name] = &anthropic.ReasoningOptionMetadata{
-					Signature: reasoning.Signature,
+		for _, rawPart := range m.Parts {
+			switch content := rawPart.(type) {
+			case TextContent:
+				if text := strings.TrimSpace(content.Text); text != "" {
+					parts = append(parts, fantasy.TextPart{Text: text})
 				}
-			}
-			if reasoning.ResponsesData != nil {
-				reasoningPart.ProviderOptions[openai.Name] = reasoning.ResponsesData
-			}
-			if reasoning.ThoughtSignature != "" {
-				reasoningPart.ProviderOptions[google.Name] = &google.ReasoningMetadata{
-					Signature: reasoning.ThoughtSignature,
-					ToolID:    reasoning.ToolID,
+			case ReasoningContent:
+				if content.Thinking == "" && content.Signature == "" && content.ThoughtSignature == "" && content.ResponsesData == nil {
+					continue
 				}
+				reasoningPart := fantasy.ReasoningPart{Text: content.Thinking, ProviderOptions: fantasy.ProviderOptions{}}
+				if content.Signature != "" {
+					reasoningPart.ProviderOptions[anthropic.Name] = &anthropic.ReasoningOptionMetadata{
+						Signature: content.Signature,
+					}
+				}
+				if content.ResponsesData != nil {
+					reasoningPart.ProviderOptions[openai.Name] = &openai.ResponsesReasoningMetadata{
+						ItemID:           content.ResponsesData.ItemID,
+						EncryptedContent: content.ResponsesData.EncryptedContent,
+						Summary:          append([]string(nil), content.ResponsesData.Summary...),
+					}
+				}
+				if content.ThoughtSignature != "" {
+					reasoningPart.ProviderOptions[google.Name] = &google.ReasoningMetadata{
+						Signature: content.ThoughtSignature,
+						ToolID:    content.ToolID,
+					}
+				}
+				parts = append(parts, reasoningPart)
+			case ToolCall:
+				parts = append(parts, fantasy.ToolCallPart{
+					ToolCallID:       content.ID,
+					ToolName:         content.Name,
+					Input:            content.Input,
+					ProviderExecuted: content.ProviderExecuted,
+				})
 			}
-			parts = append(parts, reasoningPart)
-		}
-		for _, call := range m.ToolCalls() {
-			parts = append(parts, fantasy.ToolCallPart{
-				ToolCallID:       call.ID,
-				ToolName:         call.Name,
-				Input:            call.Input,
-				ProviderExecuted: call.ProviderExecuted,
-			})
 		}
 		messages = append(messages, fantasy.Message{
 			Role:    fantasy.MessageRoleAssistant,

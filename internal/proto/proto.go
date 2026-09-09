@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
+	"github.com/charmbracelet/crush/internal/agent/notify"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/lsp"
 )
@@ -76,12 +77,13 @@ type CurrentSession struct {
 // SessionID may arrive first, and filtering by SessionID alone
 // would terminate the caller before its own turn ran.
 type RunComplete struct {
-	SessionID string `json:"session_id"`
-	RunID     string `json:"run_id,omitempty"`
-	MessageID string `json:"message_id"`
-	Text      string `json:"text,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Cancelled bool   `json:"cancelled,omitempty"`
+	SessionID string               `json:"session_id"`
+	RunID     string               `json:"run_id,omitempty"`
+	MessageID string               `json:"message_id"`
+	Text      string               `json:"text,omitempty"`
+	Error     string               `json:"error,omitempty"`
+	Cancelled bool                 `json:"cancelled,omitempty"`
+	Telemetry *notify.RunTelemetry `json:"telemetry,omitempty"`
 }
 
 // SkillInfo describes a visible skill exposed to a frontend.
@@ -146,6 +148,10 @@ type AgentMessage struct {
 	RunID       string       `json:"run_id,omitempty"`
 	Prompt      string       `json:"prompt"`
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// MaxInputTokens is an optional per-run aggregate input budget. A zero
+	// value leaves ordinary runs unlimited; the desktop review path is the
+	// only caller that sets it.
+	MaxInputTokens int64 `json:"max_input_tokens,omitempty"`
 }
 
 // ShellCommandRequest represents a request to run a shell command directly.

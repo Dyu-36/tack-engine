@@ -75,4 +75,52 @@ type RunComplete struct {
 	Text      string
 	Error     string
 	Cancelled bool
+	Telemetry *RunTelemetry
+}
+
+type CacheStatus string
+
+const (
+	CacheHit        CacheStatus = "hit"
+	CacheMiss       CacheStatus = "miss"
+	CacheUnreported CacheStatus = "unreported"
+)
+
+type RunTelemetry struct {
+	RunID               string           `json:"run_id,omitempty"`
+	Provider            string           `json:"provider,omitempty"`
+	Model               string           `json:"model,omitempty"`
+	ReasoningEffort     string           `json:"reasoning_effort,omitempty"`
+	Attempt             int              `json:"attempt"`
+	RetryCount          int              `json:"retry_count"`
+	RetryDelayMicros    int64            `json:"retry_delay_us,omitempty"`
+	SpansMicros         map[string]int64 `json:"spans_us,omitempty"`
+	TotalMicros         int64            `json:"total_us"`
+	FirstSemantic       string           `json:"first_semantic,omitempty"`
+	// Per-kind one-shot semantic offsets (microseconds since run start).
+	// A kind that never happened stays absent, never zero, so a
+	// tool-only run does not report a text TTFT of 0.
+	FirstReasoningMicros *int64          `json:"first_reasoning_us,omitempty"`
+	FirstToolMicros      *int64          `json:"first_tool_us,omitempty"`
+	FirstTextMicros      *int64          `json:"first_text_us,omitempty"`
+	CacheStatus         CacheStatus      `json:"cache_status"`
+	CachedInputTokens   *int64           `json:"cached_input_tokens,omitempty"`
+	UncachedInputTokens *int64           `json:"uncached_input_tokens,omitempty"`
+	ServiceTier         string           `json:"service_tier,omitempty"`
+	ProviderRequestID   string           `json:"provider_request_id,omitempty"`
+	EstimatedUsage      bool             `json:"estimated_usage,omitempty"`
+	Compacted           bool             `json:"compacted,omitempty"`
+	PrefixChangedReason string           `json:"prefix_changed_reason,omitempty"`
+	// ChangeReasons is the optional sorted, unique list of every prefix
+	// change observed in the run, including dynamic-only reasons that do
+	// not move the primary PrefixChangedReason. Allowed values:
+	// git_status, date, mcp, skills, context, tool_set, compaction,
+	// model_switch, none, initial, todo, provider_options.
+	ChangeReasons      []string `json:"change_reasons,omitempty"`
+	StablePrefixHMAC   string   `json:"stable_prefix_hmac,omitempty"`
+	StablePrefixBytes  int      `json:"stable_prefix_bytes,omitempty"`
+	DynamicSuffixHMAC  string   `json:"dynamic_suffix_hmac,omitempty"`
+	DynamicSuffixBytes int      `json:"dynamic_suffix_bytes,omitempty"`
+	RequestShapeHMAC   string   `json:"request_shape_hmac,omitempty"`
+	RequestShapeBytes  int      `json:"request_shape_bytes,omitempty"`
 }

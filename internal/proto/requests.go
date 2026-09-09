@@ -15,6 +15,13 @@ type ConfigSetRequest struct {
 	Value any          `json:"value"`
 }
 
+// ConfigSetBatchRequest represents an atomic multi-field config mutation.
+type ConfigSetBatchRequest struct {
+	Scope config.Scope `json:"scope"`
+	// Fields maps JSON paths to values and must contain at least one entry.
+	Fields map[string]any `json:"fields" binding:"required"`
+}
+
 // ConfigRemoveRequest represents a request to remove a config field.
 type ConfigRemoveRequest struct {
 	Scope config.Scope `json:"scope"`
@@ -26,6 +33,14 @@ type ConfigModelRequest struct {
 	Scope     config.Scope             `json:"scope"`
 	ModelType config.SelectedModelType `json:"model_type"`
 	Model     config.SelectedModel     `json:"model"`
+}
+
+// ConfigModelsRequest represents an atomic preferred-model mutation. A null
+// map value removes that model slot.
+type ConfigModelsRequest struct {
+	Scope config.Scope `json:"scope"`
+	// Models maps large/small slots to selections; a null value deletes a slot.
+	Models map[config.SelectedModelType]*config.SelectedModel `json:"models" binding:"required"`
 }
 
 // ConfigCompactRequest represents a request to set compact mode.

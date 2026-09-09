@@ -31,6 +31,27 @@ func NewTracker(activeSkills []*Skill) *Tracker {
 	}
 }
 
+// SetActiveSkills replaces the set of names that may be marked loaded while
+// preserving loaded state for skills that remain active.
+func (t *Tracker) SetActiveSkills(activeSkills []*Skill) {
+	if t == nil {
+		return
+	}
+	activeNames := make(map[string]bool, len(activeSkills))
+	for _, skill := range activeSkills {
+		activeNames[skill.Name] = true
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.activeNames = activeNames
+	for name := range t.loaded {
+		if !activeNames[name] {
+			delete(t.loaded, name)
+		}
+	}
+}
+
 // MarkLoaded marks a skill as having been loaded.
 // Only marks as loaded if the skill is in the active set (not overridden/disabled).
 func (t *Tracker) MarkLoaded(name string) {

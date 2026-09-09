@@ -156,3 +156,98 @@ func TestUpdatePreferredModel_TypeIsolation(t *testing.T) {
 	require.Len(t, store.Config().RecentModels[SelectedModelTypeSmall], 1)
 	require.Equal(t, smallModel, store.Config().RecentModels[SelectedModelTypeSmall][0])
 }
+
+func TestUpdatePreferredModels_SetsPairWithRecentsAndPins(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &Config{}
+	cfg.setDefaults(dir, "")
+	store := testStoreWithPath(cfg, dir)
+
+	large := SelectedModel{Provider: "openai", Model: "gpt-5"}
+	small := SelectedModel{Provider: "openai", Model: "gpt-5-mini"}
+	require.NoError(t, store.UpdatePreferredModels(ScopeGlobal, map[SelectedModelType]*SelectedModel{
+		SelectedModelTypeLarge: &large,
+		SelectedModelTypeSmall: &small,
+	}))
+
+	require.Equal(t, large, store.Config().Models[SelectedModelTypeLarge])
+	require.Equal(t, small, store.Config().Models[SelectedModelTypeSmall])
+	require.Equal(t, large, store.overrides.Models[SelectedModelTypeLarge])
+	require.Equal(t, small, store.overrides.Models[SelectedModelTypeSmall])
+	require.Equal(t, large, store.Config().RecentModels[SelectedModelTypeLarge][0])
+	require.Equal(t, small, store.Config().RecentModels[SelectedModelTypeSmall][0])
+
+	persisted := readConfigJSON(t, store.globalDataPath)
+	models := persisted["models"].(map[string]any)
+	require.Equal(t, "gpt-5", models["large"].(map[string]any)["model"])
+	require.Equal(t, "gpt-5-mini", models["small"].(map[string]any)["model"])
+}
+
+func TestUpdatePreferredModels_RemovesPairButKeepsRecents(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfg := &Config{}
+	cfg.setDefaults(dir, "")
+	store := testStoreWithPath(cfg, dir)
+
+	large := SelectedModel{Provider: "openai", Model: "gpt-5"}
+	small := SelectedModel{Provider: "openai", Model: "gpt-5-mini"}
+	require.NoError(t, store.UpdatePreferredModels(ScopeGlobal, map[SelectedModelType]*SelectedModel{
+		SelectedModelTypeLarge: &large,
+		SelectedModelTypeSmall: &small,
+	}))
+	require.NoError(t, store.UpdatePreferredModels(ScopeGlobal, map[SelectedModelType]*SelectedModel{
+		SelectedModelTypeLarge: nil,
+		SelectedModelTypeSmall: nil,
+	}))
+
+	require.NotContains(t, store.Config().Models, SelectedModelTypeLarge)
+	require.NotContains(t, store.Config().Models, SelectedModelTypeSmall)
+	require.NotContains(t, store.overrides.Models, SelectedModelTypeLarge)
+	require.NotContains(t, store.overrides.Models, SelectedModelTypeSmall)
+	require.Equal(t, large, store.Config().RecentModels[SelectedModelTypeLarge][0])
+	require.Equal(t, small, store.Config().RecentModels[SelectedModelTypeSmall][0])
+
+	persisted := readConfigJSON(t, store.globalDataPath)
+	models := persisted["models"].(map[string]any)
+	require.NotContains(t, models, "large")
+	require.NotContains(t, models, "small")
+	require.Contains(t, persisted["recent_models"].(map[string]any), "large")
+	require.Contains(t, persisted["recent_models"].(map[string]any), "small")
+}
+
+func TestUpdatePreferredModels_RejectsInvalidInputWithoutPublishing(t *testing.T) {
+	t.Parallel()
+
+	valid := SelectedModel{Provider: "openai", Model: "gpt-5"}
+	incomplete := SelectedModel{Provider: "openai"}
+	tests := []struct {
+		name    string
+		scope   Scope
+		updates map[SelectedModelType]*SelectedModel
+	}{
+		{name: "empty map", scope: ScopeGlobal, updates: map[SelectedModelType]*SelectedModel{}},
+		{name: "unknown type", scope: ScopeGlobal, updates: map[SelectedModelType]*SelectedModel{"medium": &valid}},
+		{name: "incomplete model", scope: ScopeGlobal, updates: map[SelectedModelType]*SelectedModel{SelectedModelTypeLarge: &incomplete}},
+		{name: "unknown scope", scope: Scope(99), updates: map[SelectedModelType]*SelectedModel{SelectedModelTypeLarge: &valid}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			cfg := &Config{}
+			cfg.setDefaults(dir, "")
+			store := testStoreWithPath(cfg, dir)
+			before := store.Config()
+
+			err := store.UpdatePreferredModels(tt.scope, tt.updates)
+			require.ErrorIs(t, err, ErrInvalidConfigMutation)
+			require.Same(t, before, store.Config())
+			require.Empty(t, store.overrides.Models)
+		})
+	}
+}

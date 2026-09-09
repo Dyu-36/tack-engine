@@ -249,6 +249,12 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 				addState("", path, StateError, err)
 				return nil
 			}
+			// Archived background-review skills are retained for provenance but
+			// must not be rediscovered as active skills. Hermes treats .archive
+			// as an excluded skill directory; keep this exact exclusion narrow.
+			if d.IsDir() && d.Name() == ".archive" {
+				return fastwalk.SkipDir
+			}
 			if d.IsDir() || d.Name() != SkillFileName {
 				return nil
 			}

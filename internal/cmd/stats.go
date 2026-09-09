@@ -222,7 +222,7 @@ func runStats(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	if outputDataDir == "" {
-		outputDataDir = ".crush"
+		outputDataDir = ".tack"
 	}
 
 	htmlPath := filepath.Join(outputDataDir, "stats/index.html")
@@ -257,10 +257,16 @@ func crawlForStats(ctx context.Context, rootDir string) ([]ProjectStats, error) 
 			return filepath.SkipDir
 		}
 
-		// Look for .crush/crush.db pattern
-		if !d.IsDir() && d.Name() == "crush.db" {
+		// Look for .tack/tack.db or legacy .crush/crush.db pattern
+		if !d.IsDir() && (d.Name() == "tack.db" || d.Name() == "crush.db") {
 			dir := filepath.Dir(path)
-			if filepath.Base(dir) == ".crush" {
+			if filepath.Base(dir) == ".tack" || filepath.Base(dir) == ".crush" {
+				// Prefer tack.db if both exist in the directory
+				if d.Name() == "crush.db" {
+					if _, err := os.Stat(filepath.Join(dir, "tack.db")); err == nil {
+						return nil
+					}
+				}
 				projectDir := filepath.Dir(dir)
 				dbPaths = append(dbPaths, struct {
 					dbPath     string
@@ -323,7 +329,10 @@ func gatherStatsFromProjects(ctx context.Context) ([]ProjectStats, error) {
 	}
 
 	for _, p := range projectList.Projects {
-		dbPath := filepath.Join(p.DataDir, "crush.db")
+		dbPath := filepath.Join(p.DataDir, "tack.db")
+		if _, err := os.Stat(dbPath); err != nil {
+			dbPath = filepath.Join(p.DataDir, "crush.db")
+		}
 		if _, err := os.Stat(dbPath); err == nil {
 			dbPaths = append(dbPaths, struct {
 				dbPath     string

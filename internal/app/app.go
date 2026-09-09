@@ -135,8 +135,11 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 		slog.Warn("Clipboard initialization failed", "error", err)
 	}
 
-	// Check for updates in the background.
-	go app.checkForUpdates(ctx)
+	// Check for updates in the background unless an isolated host explicitly
+	// disables network release checks.
+	if os.Getenv("CRUSH_DISABLE_UPDATE_CHECK") != "1" {
+		go app.checkForUpdates(ctx)
+	}
 
 	// Arm initialization synchronously before launching it so WaitForInit
 	// blocks for the in-flight init instead of racing the goroutine and
@@ -686,7 +689,7 @@ func (app *App) initCoderAgent(ctx context.Context, interactive bool) error {
 		Sessions:    app.Sessions,
 		Messages:    app.Messages,
 		Permissions: app.Permissions,
-		Questions:   app.Questions,
+
 		History:     app.History,
 		FileTracker: app.FileTracker,
 		LSPManager:  app.LSPManager,

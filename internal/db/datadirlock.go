@@ -19,7 +19,7 @@ import (
 var ErrDataDirLocked = errors.New("data directory already in use by another crush process")
 
 // dataDirLockFile is the name of the lock file inside the data
-// directory. It lives next to crush.db so users can `ls` and find it.
+// directory. It lives next to tack.db so users can `ls` and find it.
 const dataDirLockFile = "crush.lock"
 
 // dataDirOwnerInfo is the JSON payload written into the lock file by

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -19,6 +20,11 @@ var whitelistDockerTools = []string{
 	"mcp_docker_mcp-config-set",
 	"mcp_docker_code-mode",
 }
+
+const (
+	recallMCPName        = "gotack-recall"
+	recallSearchToolName = "session_search"
+)
 
 // GetMCPTools gets all the currently available MCP tools.
 func GetMCPTools(permissions permission.Service, cfg *config.ConfigStore, wd string) []*Tool {
@@ -125,7 +131,11 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 		}
 	}
 
-	result, err := mcp.RunTool(ctx, m.cfg, m.mcpName, m.tool.Name, params.Input)
+	input, err := injectCurrentSessionID(m.mcpName, m.tool.Name, params.Input, sessionID)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	result, err := mcp.RunTool(ctx, m.cfg, m.mcpName, m.tool.Name, input)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
@@ -148,4 +158,27 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 	default:
 		return fantasy.NewTextResponse(result.Content), nil
 	}
+}
+
+// injectCurrentSessionID adds the trusted engine session to recall discovery
+// arguments. The field is intentionally hidden from the model-facing schema;
+// overriding any model-supplied value prevents a review from rediscovering
+// the session whose transcript is already in its prompt.
+func injectCurrentSessionID(mcpName, toolName, input, sessionID string) (string, error) {
+	if mcpName != recallMCPName || toolName != recallSearchToolName {
+		return input, nil
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(input), &args); err != nil {
+		return "", fmt.Errorf("error parsing parameters: %s", err)
+	}
+	if args == nil {
+		args = make(map[string]any)
+	}
+	args["current_session_id"] = sessionID
+	out, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("error encoding parameters: %s", err)
+	}
+	return string(out), nil
 }

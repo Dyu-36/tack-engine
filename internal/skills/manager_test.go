@@ -130,6 +130,51 @@ func TestManager_ConcurrentWorkspacesAreIsolated(t *testing.T) {
 	}
 }
 
+func TestManagerRefreshDetectsCreateUpdateAndDelete(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := DiscoveryConfig{SkillsPaths: []string{root}, WorkingDir: t.TempDir()}
+	all, active, states := DiscoverFromConfig(cfg)
+	mgr := NewManager(
+		all, active, states,
+		WithResolvedPaths(cfg.ResolvePaths()),
+		WithWorkingDir(cfg.WorkingDir),
+	)
+	t.Cleanup(mgr.Shutdown)
+
+	skillDir := filepath.Join(root, "learned-skill")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	skillFile := filepath.Join(skillDir, SkillFileName)
+	require.NoError(t, os.WriteFile(skillFile, []byte("---\nname: learned-skill\ndescription: First description.\n---\nFirst instructions.\n"), 0o644))
+
+	require.True(t, mgr.Refresh(cfg), "creating a skill must change the snapshot")
+	require.Contains(t, skillNames(mgr.ActiveSkills()), "learned-skill")
+	require.False(t, mgr.Refresh(cfg), "an unchanged tree must not trigger prompt work")
+
+	require.NoError(t, os.WriteFile(skillFile, []byte("---\nname: learned-skill\ndescription: Updated description.\n---\nUpdated instructions.\n"), 0o644))
+	require.True(t, mgr.Refresh(cfg), "editing skill content must change the snapshot")
+	var description string
+	for _, skill := range mgr.ActiveSkills() {
+		if skill.Name == "learned-skill" {
+			description = skill.Description
+		}
+	}
+	require.Equal(t, "Updated description.", description)
+
+	require.NoError(t, os.RemoveAll(skillDir))
+	require.True(t, mgr.Refresh(cfg), "deleting a skill must change the snapshot")
+	require.NotContains(t, skillNames(mgr.ActiveSkills()), "learned-skill")
+}
+
+func skillNames(all []*Skill) []string {
+	names := make([]string, 0, len(all))
+	for _, skill := range all {
+		names = append(names, skill.Name)
+	}
+	return names
+}
+
 func TestDiscoverFromConfig(t *testing.T) {
 	t.Parallel()
 

@@ -21,7 +21,7 @@ import (
 
 const (
 	appName              = "crush"
-	defaultDataDirectory = ".crush"
+	defaultDataDirectory = ".tack"
 	defaultInitializeAs  = "AGENTS.md"
 )
 
@@ -49,6 +49,11 @@ type SelectedModelType string
 // String returns the string representation of the [SelectedModelType].
 func (s SelectedModelType) String() string {
 	return string(s)
+}
+
+// Valid reports whether s names a supported preferred-model slot.
+func (s SelectedModelType) Valid() bool {
+	return s == SelectedModelTypeLarge || s == SelectedModelTypeSmall
 }
 
 const (
@@ -343,7 +348,7 @@ const (
 type Attribution struct {
 	TrailerStyle  TrailerStyle `json:"trailer_style,omitempty" jsonschema:"description=Style of attribution trailer to add to commits,enum=none,enum=co-authored-by,enum=assisted-by,default=assisted-by"`
 	CoAuthoredBy  *bool        `json:"co_authored_by,omitempty" jsonschema:"description=Deprecated: use trailer_style instead"`
-	GeneratedWith bool         `json:"generated_with,omitempty" jsonschema:"description=Add Generated with Crush line to commit messages and issues and PRs,default=true"`
+	GeneratedWith bool         `json:"generated_with,omitempty" jsonschema:"description=Add Generated with Tack line to commit messages and issues and PRs,default=true"`
 }
 
 // JSONSchemaExtend marks the co_authored_by field as deprecated in the schema.
@@ -859,8 +864,8 @@ func allToolNames() []string {
 	return []string{
 		"agent",
 		"bash",
-		"crush_info",
-		"crush_logs",
+		"tack_info",
+		"tack_logs",
 		"job_output",
 		"job_kill",
 		"download",
@@ -879,7 +884,7 @@ func allToolNames() []string {
 		"glob",
 		"grep",
 		"ls",
-		"question",
+
 		"sourcegraph",
 		"todos",
 		"view",

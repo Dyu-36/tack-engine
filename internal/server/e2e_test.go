@@ -16,6 +16,7 @@ import (
 
 	"github.com/charmbracelet/crush/internal/app"
 	"github.com/charmbracelet/crush/internal/backend"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/db"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/permission"
@@ -159,6 +160,22 @@ func (h *e2eHarness) postWorkspace(t *testing.T, args proto.Workspace) proto.Wor
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
 	require.NotEmpty(t, out.ID, "server must return a workspace id")
 	return out
+}
+
+func (h *e2eHarness) postJSON(t *testing.T, path string, value any) (int, []byte) {
+	t.Helper()
+	body, err := json.Marshal(value)
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		h.httpSrv.URL+path, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.httpSrv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, responseBody
 }
 
 // subscribeSSE opens an SSE stream against the test server for the
@@ -422,6 +439,135 @@ func TestE2E_TwoClientsReceiveSameMessage(t *testing.T) {
 	})
 	require.True(t, okB, "client B must receive the same MessageEvent")
 	require.Equal(t, sessionID, gotB.Payload.SessionID)
+}
+
+func TestE2E_ConfigBatchRoutes(t *testing.T) {
+	h := newRealCreateHarness(t)
+	h.backend.SetCreateGrace(time.Hour)
+
+	clientID := uuid.New().String()
+	workspace := h.postWorkspace(t, proto.Workspace{
+		Path:     t.TempDir(),
+		DataDir:  t.TempDir(),
+		ClientID: clientID,
+	})
+	t.Cleanup(func() {
+		require.NoError(t, h.backend.DeleteWorkspace(workspace.ID, clientID))
+	})
+
+	basePath := "/v1/workspaces/" + workspace.ID + "/config/"
+	provider := map[string]any{
+		"id":              "atomic",
+		"name":            "Atomic Provider",
+		"type":            "openai",
+		"base_url":        "https://example.invalid/v1",
+		"api_key":         "test-key",
+		"discover_models": false,
+		"models": []map[string]any{
+			{"id": "large-model", "name": "Large Model"},
+			{"id": "small-model", "name": "Small Model"},
+		},
+	}
+	status, responseBody := h.postJSON(t, basePath+"set-batch", proto.ConfigSetBatchRequest{
+		Scope: config.ScopeGlobal,
+		Fields: map[string]any{
+			"providers.atomic": provider,
+		},
+	})
+	require.Equal(t, http.StatusOK, status)
+	require.Empty(t, bytes.TrimSpace(responseBody))
+
+	ws, err := h.backend.GetWorkspace(workspace.ID)
+	require.NoError(t, err)
+	configuredProvider, ok := ws.Cfg.Config().Providers.Get("atomic")
+	require.True(t, ok)
+	require.Equal(t, "Atomic Provider", configuredProvider.Name)
+	require.Len(t, configuredProvider.Models, 2)
+
+	large := config.SelectedModel{Provider: "atomic", Model: "large-model"}
+	small := config.SelectedModel{Provider: "atomic", Model: "small-model"}
+	status, responseBody = h.postJSON(t, basePath+"models", proto.ConfigModelsRequest{
+		Scope: config.ScopeGlobal,
+		Models: map[config.SelectedModelType]*config.SelectedModel{
+			config.SelectedModelTypeLarge: &large,
+			config.SelectedModelTypeSmall: &small,
+		},
+	})
+	require.Equal(t, http.StatusOK, status)
+	require.Empty(t, bytes.TrimSpace(responseBody))
+	require.Equal(t, large, ws.Cfg.Config().Models[config.SelectedModelTypeLarge])
+	require.Equal(t, small, ws.Cfg.Config().Models[config.SelectedModelTypeSmall])
+
+	status, responseBody = h.postJSON(t, basePath+"models", proto.ConfigModelsRequest{
+		Scope: config.ScopeGlobal,
+		Models: map[config.SelectedModelType]*config.SelectedModel{
+			config.SelectedModelTypeLarge: nil,
+			config.SelectedModelTypeSmall: nil,
+		},
+	})
+	require.Equal(t, http.StatusOK, status)
+	require.Empty(t, bytes.TrimSpace(responseBody))
+	require.NotContains(t, ws.Cfg.Config().Models, config.SelectedModelTypeLarge)
+	require.NotContains(t, ws.Cfg.Config().Models, config.SelectedModelTypeSmall)
+	require.Equal(t, large, ws.Cfg.Config().RecentModels[config.SelectedModelTypeLarge][0])
+	require.Equal(t, small, ws.Cfg.Config().RecentModels[config.SelectedModelTypeSmall][0])
+
+	invalidRequests := []struct {
+		name string
+		path string
+		body any
+	}{
+		{
+			name: "empty fields",
+			path: "set-batch",
+			body: proto.ConfigSetBatchRequest{Scope: config.ScopeGlobal, Fields: map[string]any{}},
+		},
+		{
+			name: "blank field",
+			path: "set-batch",
+			body: proto.ConfigSetBatchRequest{Scope: config.ScopeGlobal, Fields: map[string]any{" ": true}},
+		},
+		{
+			name: "empty models",
+			path: "models",
+			body: proto.ConfigModelsRequest{Scope: config.ScopeGlobal, Models: map[config.SelectedModelType]*config.SelectedModel{}},
+		},
+		{
+			name: "unknown model type",
+			path: "models",
+			body: proto.ConfigModelsRequest{
+				Scope:  config.ScopeGlobal,
+				Models: map[config.SelectedModelType]*config.SelectedModel{"medium": &large},
+			},
+		},
+		{
+			name: "incomplete model",
+			path: "models",
+			body: proto.ConfigModelsRequest{
+				Scope: config.ScopeGlobal,
+				Models: map[config.SelectedModelType]*config.SelectedModel{
+					config.SelectedModelTypeLarge: {Provider: "atomic"},
+				},
+			},
+		},
+		{
+			name: "unknown scope",
+			path: "models",
+			body: proto.ConfigModelsRequest{
+				Scope: config.Scope(99),
+				Models: map[config.SelectedModelType]*config.SelectedModel{
+					config.SelectedModelTypeLarge: &large,
+				},
+			},
+		},
+	}
+	for _, tt := range invalidRequests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, body := h.postJSON(t, basePath+tt.path, tt.body)
+			require.Equal(t, http.StatusBadRequest, status)
+			require.NotEmpty(t, bytes.TrimSpace(body))
+		})
+	}
 }
 
 // TestE2E_PermissionFlowCrossClient covers PLAN item 6 scenario 2:

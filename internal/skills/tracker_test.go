@@ -47,6 +47,21 @@ func TestTracker_NonActiveSkillCannotBeMarkedLoaded(t *testing.T) {
 	require.True(t, tracker.IsLoaded("go-doc"))
 }
 
+func TestTrackerSetActiveSkillsPreservesRemainingLoadedState(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewTracker([]*Skill{{Name: "keep"}, {Name: "remove"}})
+	tracker.MarkLoaded("keep")
+	tracker.MarkLoaded("remove")
+
+	tracker.SetActiveSkills([]*Skill{{Name: "keep"}, {Name: "new"}})
+
+	require.True(t, tracker.IsLoaded("keep"))
+	require.False(t, tracker.IsLoaded("remove"))
+	tracker.MarkLoaded("new")
+	require.True(t, tracker.IsLoaded("new"))
+}
+
 func TestTracker_NilSafety(t *testing.T) {
 	t.Parallel()
 

@@ -27,6 +27,7 @@ import (
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/home"
+	openaioauth "github.com/charmbracelet/crush/internal/oauth/openai"
 	"github.com/charmbracelet/crush/internal/shellconfig"
 	powernapConfig "github.com/charmbracelet/x/powernap/pkg/config"
 	"github.com/qjebbs/go-jsons"
@@ -248,15 +249,20 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 					}
 					models = append(models, model)
 				}
-				for _, model := range p.Models {
-					if seen[model.ID] {
-						continue
+				// A ChatGPT OAuth catalog is already account-scoped. Appending the
+				// public OpenAI catalog would expose models the subscription cannot
+				// run, especially after an app restart and config reload.
+				if !openaioauth.HasSubscriptionCredential(string(p.ID), config.OAuthToken) {
+					for _, model := range p.Models {
+						if seen[model.ID] {
+							continue
+						}
+						seen[model.ID] = true
+						if model.Name == "" {
+							model.Name = model.ID
+						}
+						models = append(models, model)
 					}
-					seen[model.ID] = true
-					if model.Name == "" {
-						model.Name = model.ID
-					}
-					models = append(models, model)
 				}
 
 				p.Models = models

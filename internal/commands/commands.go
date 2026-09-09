@@ -125,6 +125,10 @@ func buildCommandSources(cfg *config.Config) []commandSource {
 			prefix: userCommandPrefix,
 		},
 		{
+			path:   filepath.Join(home.Dir(), ".tack", "commands"),
+			prefix: userCommandPrefix,
+		},
+		{
 			path:   filepath.Join(home.Dir(), ".crush", "commands"),
 			prefix: userCommandPrefix,
 		},

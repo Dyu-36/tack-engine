@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/charmbracelet/crush/internal/backend"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/google/uuid"
@@ -845,6 +846,25 @@ func (c *controllerV1) handlePostWorkspaceAgentUpdate(w http.ResponseWriter, r *
 	w.WriteHeader(http.StatusOK)
 }
 
+// handlePostWorkspaceAgentRefreshPrompt rebuilds the current coder prompt.
+//
+//	@Summary		Refresh agent prompt
+//	@Tags			agent
+//	@Param			id	path	string	true	"Workspace ID"
+//	@Success		200
+//	@Failure		400	{object}	proto.Error
+//	@Failure		404	{object}	proto.Error
+//	@Failure		500	{object}	proto.Error
+//	@Router			/workspaces/{id}/agent/refresh-prompt [post]
+func (c *controllerV1) handlePostWorkspaceAgentRefreshPrompt(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := c.backend.RefreshAgentPrompt(r.Context(), id); err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 // handleGetWorkspaceAgentSession returns a specific agent session.
 //
 //	@Summary		Get agent session
@@ -1183,6 +1203,8 @@ func (c *controllerV1) handleError(w http.ResponseWriter, r *http.Request, err e
 	case errors.Is(err, backend.ErrUnknownCommand):
 		status = http.StatusBadRequest
 	case errors.Is(err, backend.ErrInvalidClientID):
+		status = http.StatusBadRequest
+	case errors.Is(err, config.ErrInvalidConfigMutation):
 		status = http.StatusBadRequest
 	case errors.Is(err, backend.ErrClientNotAttached):
 		// 409, not 404: the workspace exists, the caller just has no live

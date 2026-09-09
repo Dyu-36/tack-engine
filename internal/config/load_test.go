@@ -44,6 +44,34 @@ func TestConfig_LoadFromBytes(t *testing.T) {
 	require.Equal(t, "https://api.openai.com/v2", pc.BaseURL)
 }
 
+func TestConfigureProvidersChatGPTOAuthUsesOnlyAccountModels(t *testing.T) {
+	t.Parallel()
+	discover := false
+	cfg := &Config{
+		Providers: csync.NewMapFrom(map[string]ProviderConfig{
+			"openai": {
+				APIKey:             "oauth-access",
+				OAuthToken:         &oauth.Token{AccessToken: "oauth-access", AccountID: "acct_123"},
+				Models:             []catwalk.Model{{ID: "gpt-entitled", Name: "Entitled"}},
+				AutoDiscoverModels: &discover,
+			},
+		}),
+	}
+	cfg.setDefaults("/tmp", "")
+	resolverEnv := env.NewFromMap(map[string]string{})
+	err := cfg.configureProviders(context.Background(), testStore(cfg), resolverEnv, NewShellVariableResolver(resolverEnv), []catwalk.Provider{{
+		ID:     catwalk.InferenceProviderOpenAI,
+		Name:   "OpenAI",
+		Type:   catwalk.TypeOpenAI,
+		Models: []catwalk.Model{{ID: "gpt-public", Name: "Public API only"}},
+	}})
+	require.NoError(t, err)
+	provider, ok := cfg.Providers.Get("openai")
+	require.True(t, ok)
+	require.Equal(t, []string{"gpt-entitled"}, []string{provider.Models[0].ID})
+	require.Len(t, provider.Models, 1)
+}
+
 func TestLookupConfigs_BoundedByProject(t *testing.T) {
 	// Force GlobalConfig and GlobalConfigData to point at locations we
 	// control so they can be present in the result without polluting
@@ -263,7 +291,7 @@ func TestConfig_setDefaults(t *testing.T) {
 		require.NotNil(t, cfg.Models)
 		require.NotNil(t, cfg.LSP)
 		require.NotNil(t, cfg.MCP)
-		require.Equal(t, filepath.Join(workingDir, ".crush"), cfg.Options.DataDirectory)
+		require.Equal(t, filepath.Join(workingDir, ".tack"), cfg.Options.DataDirectory)
 		require.Equal(t, "AGENTS.md", cfg.Options.InitializeAs)
 		// DiffMode is deliberately left empty: the permissions dialog treats
 		// the zero value as "pick split or unified based on terminal width".
@@ -832,7 +860,7 @@ func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
 
-	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "glob", "ls", "question", "sourcegraph", "todos", "view", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "bash", "tack_info", "tack_logs", "job_output", "job_kill", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "glob", "ls", "sourcegraph", "todos", "view", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
@@ -858,7 +886,7 @@ func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
 	cfg.SetupAgents()
 	coderAgent, ok := cfg.Agents[AgentCoder]
 	require.True(t, ok)
-	assert.Equal(t, []string{"agent", "bash", "crush_info", "crush_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "question", "todos", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "bash", "tack_info", "tack_logs", "job_output", "job_kill", "download", "edit", "multiedit", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_rename", "lsp_replace_symbol", "fetch", "agentic_fetch", "todos", "write", "list_mcp_resources", "read_mcp_resource"}, coderAgent.AllowedTools)
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)

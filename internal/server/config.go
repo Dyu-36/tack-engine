@@ -36,6 +36,35 @@ func (c *controllerV1) handlePostWorkspaceConfigSet(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusOK)
 }
 
+// handlePostWorkspaceConfigSetBatch sets multiple configuration fields.
+//
+//	@Summary		Set config fields atomically
+//	@Tags			config
+//	@Accept			json
+//	@Param			id		path	string						true	"Workspace ID"
+//	@Param			request	body	proto.ConfigSetBatchRequest	true	"Config batch request"
+//	@Success		200
+//	@Failure		400	{object}	proto.Error
+//	@Failure		404	{object}	proto.Error
+//	@Failure		500	{object}	proto.Error
+//	@Router			/workspaces/{id}/config/set-batch [post]
+func (c *controllerV1) handlePostWorkspaceConfigSetBatch(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req proto.ConfigSetBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.server.logError(r, "Failed to decode request", "error", err)
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+
+	if err := c.backend.SetConfigFields(id, req.Scope, req.Fields); err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 // handlePostWorkspaceConfigRemove removes a configuration field.
 //
 //	@Summary		Remove a config field
@@ -88,6 +117,35 @@ func (c *controllerV1) handlePostWorkspaceConfigModel(w http.ResponseWriter, r *
 	}
 
 	if err := c.backend.UpdatePreferredModel(id, req.Scope, req.ModelType, req.Model); err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handlePostWorkspaceConfigModels updates multiple preferred-model slots.
+//
+//	@Summary		Update preferred models atomically
+//	@Tags			config
+//	@Accept			json
+//	@Param			id		path	string					true	"Workspace ID"
+//	@Param			request	body	proto.ConfigModelsRequest	true	"Config models request"
+//	@Success		200
+//	@Failure		400	{object}	proto.Error
+//	@Failure		404	{object}	proto.Error
+//	@Failure		500	{object}	proto.Error
+//	@Router			/workspaces/{id}/config/models [post]
+func (c *controllerV1) handlePostWorkspaceConfigModels(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req proto.ConfigModelsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.server.logError(r, "Failed to decode request", "error", err)
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+
+	if err := c.backend.UpdatePreferredModels(id, req.Scope, req.Models); err != nil {
 		c.handleError(w, r, err)
 		return
 	}

@@ -13,6 +13,10 @@ import (
 	"github.com/charmbracelet/crush/internal/shell"
 )
 
+type promptRefresher interface {
+	RefreshPrompt(context.Context) error
+}
+
 // SendMessage validates and accepts a prompt for the workspace's agent,
 // then dispatches the run on a goroutine bound to the workspace context
 // and returns immediately. It does not wait for the LLM turn to
@@ -92,6 +96,7 @@ func (b *Backend) runAgent(ws *Workspace, msg proto.AgentMessage, accept *agent.
 	if msg.RunID != "" {
 		ctx = agent.WithRunID(ctx, msg.RunID)
 	}
+	ctx = agent.WithMaxInputTokens(ctx, msg.MaxInputTokens)
 	ctx = agent.WithRunCompleteMarker(ctx)
 
 	_, err := ws.AgentCoordinator.RunAccepted(ctx, accept, msg.SessionID, msg.Prompt, proto.AttachmentsToMessage(msg.Attachments)...)
@@ -162,6 +167,24 @@ func (b *Backend) UpdateAgent(ctx context.Context, workspaceID string) error {
 	}
 
 	return ws.UpdateAgentModel(ctx)
+}
+
+// RefreshAgentPrompt rebuilds the current coder prompt after live workspace
+// context settings change, without resetting sessions or queued work.
+func (b *Backend) RefreshAgentPrompt(ctx context.Context, workspaceID string) error {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return err
+	}
+	if ws.AgentCoordinator == nil {
+		return ErrAgentNotInitialized
+	}
+
+	refresher, ok := ws.AgentCoordinator.(promptRefresher)
+	if !ok {
+		return errors.New("agent prompt refresh is unavailable")
+	}
+	return refresher.RefreshPrompt(ctx)
 }
 
 // CancelSession cancels an ongoing agent operation for the given

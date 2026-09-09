@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -208,3 +209,32 @@ func TestConnect_ServerPathFailsWhenDataDirLocked(t *testing.T) {
 	require.Error(t, err, "server-path Connect must refuse to open a locked data dir")
 	require.ErrorIs(t, err, ErrDataDirLocked)
 }
+
+func TestConnect_CreatesTackDB(t *testing.T) {
+	t.Cleanup(ResetPool)
+
+	dataDir := t.TempDir()
+	conn, err := Connect(context.Background(), dataDir)
+	require.NoError(t, err)
+	require.NoError(t, conn.PingContext(context.Background()))
+	require.NoError(t, Release(dataDir))
+
+	tackPath := filepath.Join(dataDir, "tack.db")
+	require.FileExists(t, tackPath, "Connect should create tack.db")
+}
+
+func TestConnect_MigratesLegacyCrushDB(t *testing.T) {
+	t.Cleanup(ResetPool)
+
+	dataDir := t.TempDir()
+	crushPath := filepath.Join(dataDir, "crush.db")
+	require.NoError(t, os.WriteFile(crushPath, []byte("legacy-data"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "crush.db-wal"), []byte("wal"), 0o600))
+
+	resolved := resolveDBPath(dataDir)
+	require.Equal(t, filepath.Join(dataDir, "tack.db"), resolved)
+	require.FileExists(t, filepath.Join(dataDir, "tack.db"))
+	require.FileExists(t, filepath.Join(dataDir, "tack.db-wal"))
+	require.NoFileExists(t, crushPath)
+}
+

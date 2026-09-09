@@ -75,6 +75,28 @@ func WithDataDirLock(enable bool) ConnectOption {
 	return func(o *connectOptions) { o.lockDataDir = enable }
 }
 
+const (
+	DatabaseFileName       = "tack.db"
+	legacyDatabaseFileName = "crush.db"
+)
+
+func resolveDBPath(dataDir string) string {
+	target := filepath.Join(dataDir, DatabaseFileName)
+	legacy := filepath.Join(dataDir, legacyDatabaseFileName)
+	if _, err := os.Stat(target); err == nil {
+		return target
+	}
+	if _, err := os.Stat(legacy); err == nil {
+		_ = os.Rename(filepath.Join(dataDir, "crush.db-wal"), filepath.Join(dataDir, "tack.db-wal"))
+		_ = os.Rename(filepath.Join(dataDir, "crush.db-shm"), filepath.Join(dataDir, "tack.db-shm"))
+		if err := os.Rename(legacy, target); err == nil {
+			return target
+		}
+		return legacy
+	}
+	return target
+}
+
 // Connect opens a SQLite database connection for the given data
 // directory and runs migrations. If a connection to the same database
 // file already exists, the existing connection is returned with its
@@ -90,7 +112,7 @@ func Connect(ctx context.Context, dataDir string, opts ...ConnectOption) (*sql.D
 		opt(&cfg)
 	}
 
-	dbPath := filepath.Join(dataDir, "crush.db")
+	dbPath := resolveDBPath(dataDir)
 
 	// Resolve to an absolute path so that different relative paths to
 	// the same file share a single connection.
@@ -175,7 +197,7 @@ func Connect(ctx context.Context, dataDir string, opts ...ConnectOption) (*sql.D
 // data directory. When the count reaches zero the underlying connection
 // is closed and removed from the pool.
 func Release(dataDir string) error {
-	dbPath := filepath.Join(dataDir, "crush.db")
+	dbPath := resolveDBPath(dataDir)
 	absPath, err := filepath.Abs(dbPath)
 	if err != nil {
 		absPath = dbPath
@@ -185,6 +207,14 @@ func Release(dataDir string) error {
 	defer poolMu.Unlock()
 
 	entry, ok := pool[absPath]
+	if !ok {
+		legacyAbs, _ := filepath.Abs(filepath.Join(dataDir, legacyDatabaseFileName))
+		if legacyEntry, okLegacy := pool[legacyAbs]; okLegacy {
+			entry = legacyEntry
+			absPath = legacyAbs
+			ok = true
+		}
+	}
 	if !ok {
 		return nil
 	}

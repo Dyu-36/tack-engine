@@ -283,7 +283,9 @@ func TestReadBuiltinFile(t *testing.T) {
 		}, nil)
 		require.NoError(t, err)
 		require.NotEmpty(t, resp.Content)
-		require.Contains(t, resp.Content, "Crush Configuration")
+		// The hardening step rebrands model-visible skill prose to Tack;
+		// built-in skill IDs stay crush-* for compatibility.
+		require.Contains(t, resp.Content, "Tack Configuration")
 	})
 
 	t.Run("not found", func(t *testing.T) {

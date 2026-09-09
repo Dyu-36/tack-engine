@@ -26,11 +26,18 @@ type OAuthClient struct {
 
 // Token represents an OAuth2 token.
 type Token struct {
-	AccessToken  string       `json:"access_token"`
-	RefreshToken string       `json:"refresh_token,omitempty"`
-	ExpiresIn    int          `json:"expires_in"`
-	ExpiresAt    int64        `json:"expires_at"`
-	Client       *OAuthClient `json:"client,omitempty"`
+	AccessToken    string       `json:"access_token"`
+	RefreshToken   string       `json:"refresh_token,omitempty"`
+	IDToken        string       `json:"id_token,omitempty"`
+	TokenType      string       `json:"token_type,omitempty"`
+	ExpiresIn      int          `json:"expires_in"`
+	ExpiresAt      int64        `json:"expires_at"`
+	AccountID      string       `json:"account_id,omitempty"`
+	AccountEmail   string       `json:"account_email,omitempty"`
+	AccountPlan    string       `json:"account_plan,omitempty"`
+	ChatGPTUserID  string       `json:"chatgpt_user_id,omitempty"`
+	AccountFedRAMP bool         `json:"chatgpt_account_is_fedramp,omitempty"`
+	Client         *OAuthClient `json:"client,omitempty"`
 }
 
 // SetExpiresAt calculates and sets the ExpiresAt field based on the

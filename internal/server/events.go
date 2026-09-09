@@ -145,6 +145,7 @@ func wrapEvent(ev any) *pubsub.Payload {
 				Text:      e.Payload.Text,
 				Error:     e.Payload.Error,
 				Cancelled: e.Payload.Cancelled,
+				Telemetry: e.Payload.Telemetry,
 			},
 		})
 	case pubsub.Event[proto.ConfigChanged]:

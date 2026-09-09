@@ -17,7 +17,7 @@ import (
 	"charm.land/fantasy"
 )
 
-const CrushLogsToolName = "crush_logs"
+const CrushLogsToolName = "tack_logs"
 
 //go:embed crush_logs.md.tpl
 var crushLogsDescriptionTmpl []byte

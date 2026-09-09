@@ -40,10 +40,15 @@ func TestConfigProviderKeyRequestOAuthRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	tok := &oauth.Token{
-		AccessToken:  "access",
-		RefreshToken: "refresh",
-		ExpiresIn:    60,
-		ExpiresAt:    1234567890,
+		AccessToken:    "access",
+		RefreshToken:   "refresh",
+		ExpiresIn:      60,
+		ExpiresAt:      1234567890,
+		AccountID:      "acct_123",
+		AccountEmail:   "user@example.com",
+		AccountPlan:    "plus",
+		ChatGPTUserID:  "user_123",
+		AccountFedRAMP: true,
 	}
 	apiKey, err := json.Marshal(tok)
 	require.NoError(t, err)

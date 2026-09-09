@@ -23,6 +23,30 @@ func TestUsageIsZero(t *testing.T) {
 	require.False(t, usageIsZero(fantasy.Usage{CacheReadTokens: 1}))
 }
 
+func TestReviewInputBudgetReached(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		used   int64
+		budget int64
+		want   bool
+	}{
+		{name: "below", used: 99, budget: 100, want: false},
+		{name: "equal", used: 100, budget: 100, want: true},
+		{name: "over", used: 101, budget: 100, want: true},
+		{name: "disabled", used: 999, budget: 0, want: false},
+		{name: "negative disabled", used: 999, budget: -1, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := reviewInputBudgetReached(tc.used, tc.budget); got != tc.want {
+				t.Fatalf("reviewInputBudgetReached(%d, %d) = %v, want %v", tc.used, tc.budget, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFallbackStepUsageKeepsProviderUsage(t *testing.T) {
 	t.Parallel()
 
