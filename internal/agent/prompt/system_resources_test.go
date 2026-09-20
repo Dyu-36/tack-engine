@@ -59,14 +59,14 @@ func TestSystemResourcesEmptyOverrideAndLimits(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r, err := loadSystemResources(project)
+	r, err := loadSystemResources(project, true)
 	if err != nil || !r.Replace || r.System != "" {
 		t.Fatalf("empty override lost: %+v %v", r, err)
 	}
 	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxSystemResourceBytes+1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadSystemResources(project); err == nil {
+	if _, err := loadSystemResources(project, true); err == nil {
 		t.Fatal("oversized resource accepted")
 	}
 	if err := os.Remove(path); err != nil {
@@ -75,7 +75,42 @@ func TestSystemResourcesEmptyOverrideAndLimits(t *testing.T) {
 	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadSystemResources(project); err == nil {
+	if _, err := loadSystemResources(project, true); err == nil {
 		t.Fatal("directory resource accepted")
+	}
+}
+
+
+func TestLoadSystemResourcesUntrustedProjectUsesOnlyGlobal(t *testing.T) {
+	root := t.TempDir()
+	global := filepath.Join(root, "global")
+	workdir := filepath.Join(root, "project")
+	for _, dir := range []string{global, filepath.Join(workdir, ".pi")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(global, "SYSTEM.md"), []byte("global system"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(global, "APPEND_SYSTEM.md"), []byte("global append"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".pi", "SYSTEM.md"), []byte("project system"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, ".pi", "APPEND_SYSTEM.md"), []byte("project append"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CRUSH_GLOBAL_CONFIG", global)
+	got, err := loadSystemResources(workdir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.System != "global system" || !got.Replace {
+		t.Fatalf("system = %q replace=%v", got.System, got.Replace)
+	}
+	if got.Append != "global append" {
+		t.Fatalf("append = %q", got.Append)
 	}
 }
