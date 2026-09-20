@@ -80,7 +80,6 @@ func TestSystemResourcesEmptyOverrideAndLimits(t *testing.T) {
 	}
 }
 
-
 func TestLoadSystemResourcesUntrustedProjectUsesOnlyGlobal(t *testing.T) {
 	root := t.TempDir()
 	global := filepath.Join(root, "global")
