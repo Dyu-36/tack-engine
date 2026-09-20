@@ -237,4 +237,3 @@ func TestConnect_MigratesLegacyCrushDB(t *testing.T) {
 	require.FileExists(t, filepath.Join(dataDir, "tack.db-wal"))
 	require.NoFileExists(t, crushPath)
 }
-
