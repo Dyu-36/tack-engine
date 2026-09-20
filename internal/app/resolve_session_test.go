@@ -28,6 +28,12 @@ func (m *mockSessionService) Create(_ context.Context, title string) (session.Se
 	return s, nil
 }
 
+func (m *mockSessionService) CreateChild(_ context.Context, parentSessionID, title string) (session.Session, error) {
+	s := session.Session{ID: "child-session-id", ParentSessionID: parentSessionID, Title: title}
+	m.created = append(m.created, s)
+	return s, nil
+}
+
 func (m *mockSessionService) CreateTitleSession(context.Context, string) (session.Session, error) {
 	return session.Session{}, nil
 }
