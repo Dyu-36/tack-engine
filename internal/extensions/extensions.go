@@ -328,11 +328,11 @@ type externalTool struct {
 
 func (t *externalTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
-		Name:       t.tool.Manifest.Name,
+		Name:        t.tool.Manifest.Name,
 		Description: t.tool.Manifest.Description,
-		Parameters: t.tool.Manifest.Parameters,
-		Required:   append([]string(nil), t.tool.Manifest.Required...),
-		Parallel:   t.tool.Manifest.Parallel,
+		Parameters:  t.tool.Manifest.Parameters,
+		Required:    append([]string(nil), t.tool.Manifest.Required...),
+		Parallel:    t.tool.Manifest.Parallel,
 	}
 }
 
