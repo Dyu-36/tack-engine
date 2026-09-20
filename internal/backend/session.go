@@ -133,7 +133,6 @@ func (b *Backend) ListAllUserMessages(ctx context.Context, workspaceID string) (
 	return ws.Messages.ListAllUserMessages(ctx)
 }
 
-
 // CloneSession creates a child session with an exact copy of the source transcript.
 // Usage counters reset because the clone has not spent model tokens yet.
 func (b *Backend) CloneSession(ctx context.Context, workspaceID, sessionID string) (session.Session, error) {
