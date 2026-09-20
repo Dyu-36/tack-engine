@@ -180,10 +180,9 @@ func TestSkillValidate(t *testing.T) {
 			errMsg:  "alphanumeric with hyphens",
 		},
 		{
-			name:    "name doesn't match directory",
+			name:    "name may differ from directory like Pi",
 			skill:   Skill{Name: "my-skill", Description: "Some description.", Path: "/skills/other-skill"},
-			wantErr: true,
-			errMsg:  "must match directory",
+			wantErr: false,
 		},
 		{
 			name:    "description too long",
@@ -239,12 +238,12 @@ description: Second test skill.
 # Skill Two
 `), 0o644))
 
-	// Create invalid skill (won't be included).
-	invalidDir := filepath.Join(tmpDir, "invalid-dir")
-	require.NoError(t, os.MkdirAll(invalidDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(invalidDir, "SKILL.md"), []byte(`---
-name: wrong-name
-description: Name doesn't match directory.
+	// Pi allows a skill name to differ from its directory.
+	aliasDir := filepath.Join(tmpDir, "shared-dir")
+	require.NoError(t, os.MkdirAll(aliasDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(aliasDir, "SKILL.md"), []byte(`---
+name: shared-skill
+description: Name intentionally differs from directory.
 ---
 `), 0o644))
 
@@ -252,23 +251,17 @@ description: Name doesn't match directory.
 
 	var normalCount int
 	var errorCount int
-	var hasInvalidDir bool
 	for _, state := range states {
 		if state.State == StateNormal {
 			normalCount++
 		}
 		if state.State == StateError {
 			errorCount++
-			if strings.Contains(state.Path, "invalid-dir") {
-				hasInvalidDir = true
-			}
 		}
 	}
-	require.Equal(t, 2, normalCount)
-	require.Equal(t, 1, errorCount)
-	require.True(t, hasInvalidDir)
-	require.Len(t, skills, 2)
-	require.Equal(t, []string{"skill-two", "skill-one"}, []string{skills[0].Name, skills[1].Name})
+	require.Equal(t, 3, normalCount)
+	require.Equal(t, 0, errorCount)
+	require.Len(t, skills, 3)
 
 	names := make(map[string]bool)
 	for _, s := range skills {
@@ -276,6 +269,46 @@ description: Name doesn't match directory.
 	}
 	require.True(t, names["skill-one"])
 	require.True(t, names["skill-two"])
+}
+
+func TestDiscoverPiRootMarkdownAndAgentsGroupedMarkdown(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	piRoot := filepath.Join(root, ".pi", "skills")
+	agentsRoot := filepath.Join(root, ".agents", "skills")
+	require.NoError(t, os.MkdirAll(filepath.Join(agentsRoot, "group"), 0o755))
+	require.NoError(t, os.MkdirAll(piRoot, 0o755))
+	write := func(path, name string) {
+		require.NoError(t, os.WriteFile(path, []byte("---\nname: "+name+"\ndescription: Discovery test.\n---\n# Test\n"), 0o644))
+	}
+	write(filepath.Join(piRoot, "direct.md"), "pi-direct")
+	write(filepath.Join(agentsRoot, "ignored-root.md"), "agents-root")
+	write(filepath.Join(agentsRoot, "group", "grouped.md"), "agents-grouped")
+	write(filepath.Join(piRoot, "ignored", "nested.md"), "pi-nested")
+
+	skills, states := DiscoverWithStates([]string{piRoot, agentsRoot})
+	names := make(map[string]bool, len(skills))
+	for _, skill := range skills {
+		names[skill.Name] = true
+	}
+	require.True(t, names["pi-direct"])
+	require.True(t, names["agents-grouped"])
+	require.False(t, names["agents-root"])
+	require.False(t, names["pi-nested"])
+	require.Len(t, states, 2)
+}
+
+func TestDiscoverExplicitMarkdownPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "standalone.md")
+	require.NoError(t, os.WriteFile(path, []byte("---\nname: standalone\ndescription: Explicit path skill.\n---\n# Standalone\n"), 0o644))
+	skills, states := DiscoverWithStates([]string{path})
+	require.Len(t, skills, 1)
+	require.Equal(t, "standalone", skills[0].Name)
+	require.Len(t, states, 1)
 }
 
 func TestDiscoverEmptyDir(t *testing.T) {
