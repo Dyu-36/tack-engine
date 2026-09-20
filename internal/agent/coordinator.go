@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/discover"
 	"github.com/charmbracelet/crush/internal/event"
+	"github.com/charmbracelet/crush/internal/extensions"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/history"
 	"github.com/charmbracelet/crush/internal/log"
@@ -122,6 +124,7 @@ type coordinator struct {
 
 	skills            *skills.Manager
 	skillTracker      *skills.Tracker
+	extensions        *extensions.Manager
 	skillsRefreshMu   sync.Mutex
 	skillsPromptDirty bool
 	lastPromptText    string
@@ -162,6 +165,11 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 	}
 	activeSkills := skillsMgr.ActiveSkills()
 	skillTracker := skills.NewTracker(activeSkills)
+	extensionManager := extensions.NewManager(opts.Config.WorkingDir(), filepath.Dir(config.GlobalConfig()))
+	options := opts.Config.Config().Options
+	if err := extensionManager.Refresh(options.IsProjectTrusted(), options.ExtensionPaths, options.DisabledExtensions); err != nil {
+		return nil, fmt.Errorf("load extensions: %w", err)
+	}
 
 	c := &coordinator{
 		cfg:      opts.Config,
@@ -175,6 +183,7 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		agents:       make(map[string]SessionAgent),
 		skills:       skillsMgr,
 		skillTracker: skillTracker,
+		extensions:   extensionManager,
 		interactive:  opts.Interactive,
 	}
 
@@ -782,28 +791,88 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	return result, nil
 }
 
-// toolPromptOption projects the enabled tool registry into the system prompt:
-// the tool list plus the guideline bullets derived from those same tools.
+// refreshExtensions reloads global and trusted project extension manifests at the
+// same pre-run boundary used for skills. Extensions run with the process user's
+// full privileges; project trust only controls whether project-local manifests
+// are loaded.
+func (c *coordinator) refreshExtensions() error {
+	if c.extensions == nil {
+		return nil
+	}
+	options := c.cfg.Config().Options
+	if err := c.extensions.Refresh(options.IsProjectTrusted(), options.ExtensionPaths, options.DisabledExtensions); err != nil {
+		return err
+	}
+	core := make(map[string]struct{})
+	for _, spec := range toolRegistry() {
+		core[spec.Name] = struct{}{}
+	}
+	for _, tool := range c.extensions.Snapshot().Tools {
+		if _, reserved := core[tool.Manifest.Name]; reserved {
+			return fmt.Errorf("extension tool %q conflicts with a built-in tool", tool.Manifest.Name)
+		}
+	}
+	return nil
+}
+
+func extensionSnippet(description string) string {
+	description = strings.Join(strings.Fields(description), " ")
+	const limit = 180
+	runes := []rune(description)
+	if len(runes) <= limit {
+		return description
+	}
+	return string(runes[:limit-3]) + "..."
+}
+
+// enabledToolSpecs combines the small built-in registry with tools supplied by
+// loaded extensions. Built-ins honor the agent allowlist; extension tools are
+// enabled by default and can be disabled by name through options.disabled_tools.
+func (c *coordinator) enabledToolSpecs(agentCfg config.Agent) []toolSpec {
+	core, _ := registrySnapshots(agentCfg.AllowedTools)
+	result := append([]toolSpec(nil), core...)
+	if c.extensions == nil {
+		return result
+	}
+	disabled := c.cfg.Config().Options.DisabledTools
+	for _, extensionTool := range c.extensions.Snapshot().Tools {
+		if slices.Contains(disabled, extensionTool.Manifest.Name) {
+			continue
+		}
+		tool := extensionTool
+		result = append(result, toolSpec{
+			Name:    tool.Manifest.Name,
+			Snippet: extensionSnippet(tool.Manifest.Description),
+			Build: func(c *coordinator) fantasy.AgentTool {
+				return tool.AgentTool(c.cfg.WorkingDir())
+			},
+		})
+	}
+	slices.SortFunc(result, func(a, b toolSpec) int { return strings.Compare(a.Name, b.Name) })
+	return result
+}
+
+// toolPromptOption projects the exact enabled tool registry into the system
+// prompt so extension tools and built-ins cannot drift from what the model can
+// actually call.
 func (c *coordinator) toolPromptOption() prompt.Option {
-	allowed := c.cfg.Config().Agents[config.AgentCoder].AllowedTools
-	_, infos := registrySnapshots(allowed)
-	names := make([]string, 0, len(infos))
-	for _, info := range infos {
-		names = append(names, info.Name)
+	agentCfg := c.cfg.Config().Agents[config.AgentCoder]
+	specs := c.enabledToolSpecs(agentCfg)
+	infos := make([]prompt.ToolInfo, 0, len(specs))
+	names := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		infos = append(infos, prompt.ToolInfo{Name: spec.Name, Snippet: spec.Snippet})
+		names = append(names, spec.Name)
 	}
 	return prompt.WithTools(infos, promptGuidelines(names))
 }
 
-func (c *coordinator) buildTools(_ context.Context, agent config.Agent) ([]fantasy.AgentTool, error) {
-	// Pi-like core: a small, explicit registry of tools. Only these are built;
-	// whatever is registered here is exactly what the model is told about.
-
-	specs, _ := registrySnapshots(agent.AllowedTools)
+func (c *coordinator) buildTools(_ context.Context, agentCfg config.Agent) ([]fantasy.AgentTool, error) {
+	specs := c.enabledToolSpecs(agentCfg)
 	allTools := make([]fantasy.AgentTool, 0, len(specs))
 	for _, spec := range specs {
 		allTools = append(allTools, spec.Build(c))
 	}
-
 	slices.SortFunc(allTools, func(a, b fantasy.AgentTool) int {
 		return strings.Compare(a.Info().Name, b.Info().Name)
 	})
@@ -1226,6 +1295,9 @@ func (c *coordinator) UpdateModels(ctx context.Context) error {
 		return err
 	}
 	c.currentAgent.SetModels(large, small)
+	if err := c.refreshExtensions(); err != nil {
+		return fmt.Errorf("failed to refresh extensions: %w", err)
+	}
 	if err := c.refreshSkills(ctx, large.Model.Provider(), large.Model.Model()); err != nil {
 		return fmt.Errorf("failed to refresh skills: %w", err)
 	}
@@ -1289,6 +1361,9 @@ func (c *coordinator) RefreshPrompt(ctx context.Context) error {
 	if err := c.readyWg.Wait(); err != nil {
 		return err
 	}
+	if err := c.refreshExtensions(); err != nil {
+		return fmt.Errorf("refresh extensions: %w", err)
+	}
 
 	c.skillsRefreshMu.Lock()
 	defer c.skillsRefreshMu.Unlock()
@@ -1307,6 +1382,15 @@ func (c *coordinator) RefreshPrompt(ctx context.Context) error {
 		return err
 	}
 	c.currentAgent.SetPromptBuild(build)
+	agentCfg, ok := c.cfg.Config().Agents[config.AgentCoder]
+	if !ok {
+		return errCoderAgentNotConfigured
+	}
+	tools, err := c.buildTools(ctx, agentCfg)
+	if err != nil {
+		return err
+	}
+	c.currentAgent.SetTools(tools)
 	return nil
 }
 
