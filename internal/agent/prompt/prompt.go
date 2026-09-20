@@ -389,7 +389,7 @@ func expandPath(path string, store *config.ConfigStore) string {
 // yield empty groups rather than errors.
 func loadContextFiles(paths []string, store *config.ConfigStore, platform string) []ContextGroup {
 	groups := make([]ContextGroup, 0, len(paths))
-	seen := make(map[string]struct{}, len(paths))
+	groupIndex := make(map[string]int, len(paths))
 	// renderedFiles dedupes repeated files caused by overlapping roots
 	// within this lane (e.g. "." and "sub"); project and global lanes
 	// stay separate by design.
@@ -402,22 +402,10 @@ func loadContextFiles(paths []string, store *config.ConfigStore, platform string
 			absolute = filepath.Clean(resolved)
 		}
 		pathKey := canonicalDedupeKey(absolute, platform)
-		if _, ok := seen[pathKey]; ok {
-			continue
-		}
-		// Do not consume a canonical key for an alias that cannot actually be
-		// read. This matters when tests emulate Windows case-insensitivity on
-		// a case-sensitive host: a later casing of the same path may be valid.
-		if _, err := os.Stat(absolute); err != nil {
-			continue
-		}
-		seen[pathKey] = struct{}{}
 		files := processContextPath(absolute, store)
 		unique := files[:0:0]
 		for _, file := range files {
 			file.Path = canonicalRenderPath(file.Path, platform)
-			// Rendered bytes must be identical no matter which alias
-			// casing the user configured.
 			fileKey := canonicalDedupeKey(file.Path, platform)
 			if _, dup := renderedFiles[fileKey]; dup {
 				continue
@@ -428,6 +416,16 @@ func loadContextFiles(paths []string, store *config.ConfigStore, platform string
 		slices.SortFunc(unique, func(a, b ContextFile) int {
 			return strings.Compare(a.Path, b.Path)
 		})
+		if index, exists := groupIndex[pathKey]; exists {
+			// A first alias may be unreadable only because a Linux test host is
+			// emulating Windows case folding. Prefer the later readable alias, but
+			// retain one empty group when every alias is genuinely missing.
+			if len(groups[index].Files) == 0 && len(unique) > 0 {
+				groups[index].Files = unique
+			}
+			continue
+		}
+		groupIndex[pathKey] = len(groups)
 		groups = append(groups, ContextGroup{Key: pathKey, Files: unique})
 	}
 	slices.SortFunc(groups, func(a, b ContextGroup) int {
