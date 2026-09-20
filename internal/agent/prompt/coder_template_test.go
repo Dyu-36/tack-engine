@@ -30,9 +30,9 @@ func TestCoderTemplateMatchesPiShape(t *testing.T) {
 	text, err := p.Build(t.Context(), "openai", "gpt-5.2", store)
 	require.NoError(t, err)
 
-	require.Contains(t, text, "You are an expert coding assistant operating inside Tack, a coding agent harness.")
+	require.Contains(t, text, "You are an expert coding assistant operating inside Gotack, a coding agent harness.")
 	require.Contains(t, text, "Available tools:")
-	require.Contains(t, text, "In addition to the tools above, you may have access to other custom tools depending on the project.")
+	require.NotContains(t, text, "you may have access to other custom tools")
 	require.Contains(t, text, "Guidelines:")
 	require.Contains(t, text, "Current date and time:")
 	require.Contains(t, text, "Current working directory:")

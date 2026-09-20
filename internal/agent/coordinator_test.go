@@ -109,6 +109,7 @@ func TestRefreshSkillsUpdatesNextTurnPromptIndex(t *testing.T) {
 	cfg, err := config.Init(workingDir, t.TempDir(), false)
 	require.NoError(t, err)
 	cfg.Config().Options.SkillsPaths = []string{skillsRoot}
+	cfg.Config().SetupAgents()
 
 	discoveryCfg := skillsDiscoveryConfig(cfg)
 	all, active, states := skills.DiscoverFromConfig(discoveryCfg)

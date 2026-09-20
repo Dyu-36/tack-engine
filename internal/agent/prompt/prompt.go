@@ -36,6 +36,9 @@ type Prompt struct {
 const dynamicSuffixMarker = "{{/* dynamic-suffix */}}"
 
 type PromptDat struct {
+	UserSystem         string
+	ReplaceSystem      bool
+	AppendSystem       string
 	Provider           string
 	Model              string
 	Config             config.Config
@@ -233,7 +236,7 @@ func (p *Prompt) BuildPrompt(ctx context.Context, provider, model string, store 
 		Snapshot: Snapshot{StablePrefix: stable, DynamicSuffix: dynamic},
 		Generation: &Generation{
 			Stable: map[string]string{
-				componentTemplate: contentDigest(p.template),
+				componentTemplate: contentDigest(p.template + "\x00" + fmt.Sprint(d.ReplaceSystem) + "\x00" + d.UserSystem + "\x00" + d.AppendSystem),
 				componentModel:    contentDigest(provider + "\x00" + model),
 				componentContext:  contentDigest(contextManifestDigest(d)),
 				componentSkills:   contentDigest(d.AvailSkillXML),
@@ -465,7 +468,18 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 		availSkillXML = skills.ToPromptXML(activeSkills)
 	}
 
+	var resources systemResources
+	if p.name == "coder" {
+		var err error
+		resources, err = loadSystemResources(workingDir)
+		if err != nil {
+			return PromptDat{}, err
+		}
+	}
 	data := PromptDat{
+		UserSystem:    resources.System,
+		ReplaceSystem: resources.Replace,
+		AppendSystem:  resources.Append,
 		Provider:      provider,
 		Model:         model,
 		Config:        *cfg,

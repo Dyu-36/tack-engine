@@ -42,7 +42,6 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/notify"
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
-	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/message"
@@ -736,26 +735,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	runSystemPrompt := systemPrompt
 
 	var instructions strings.Builder
-	states := mcp.GetStates()
-	serverNames := make([]string, 0, len(states))
-	for name := range states {
-		serverNames = append(serverNames, name)
-	}
-	slices.Sort(serverNames)
-	for _, name := range serverNames {
-		server := states[name]
-		if server.State != mcp.StateConnected {
-			continue
-		}
-		if s := server.Client.InitializeResult().Instructions; s != "" {
-			instructions.WriteString(s)
-			instructions.WriteString("\n\n")
-		}
-	}
-
-	if s := instructions.String(); s != "" {
-		runSystemPrompt += "\n\n<mcp-instructions>\n" + s + "\n</mcp-instructions>"
-	}
 
 	if len(agentTools) > 0 {
 		// Add Anthropic caching to the last tool.
@@ -932,7 +911,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			}
 
 			// Use latest tools (updated by SetTools when MCP tools change).
-			prepared.Tools = traceTools(a.tools.Copy(), trace)
+			prepared.Tools = traceTools(agentTools, trace)
 
 			// Drain queued follow-up prompts for this step. Calls covered
 			// by a cancel recorded while they sat in the queue are dropped:

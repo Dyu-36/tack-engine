@@ -124,6 +124,7 @@ type coordinator struct {
 	skillTracker      *skills.Tracker
 	skillsRefreshMu   sync.Mutex
 	skillsPromptDirty bool
+	lastPromptText    string
 
 	readyWg errgroup.Group
 }
@@ -1255,11 +1256,12 @@ func (c *coordinator) refreshSkills(ctx context.Context, provider, model string)
 	defer c.skillsRefreshMu.Unlock()
 
 	changed := c.skills.Refresh(skillsDiscoveryConfig(c.cfg))
-	if !changed && !c.skillsPromptDirty {
-		return nil
+	if changed {
+		c.skillsPromptDirty = true
 	}
-	c.skillsPromptDirty = true
-	c.skillTracker.SetActiveSkills(c.skills.ActiveSkills())
+	if changed {
+		c.skillTracker.SetActiveSkills(c.skills.ActiveSkills())
+	}
 
 	p, err := coderPrompt(
 		prompt.WithWorkingDir(c.cfg.WorkingDir()),
@@ -1273,7 +1275,10 @@ func (c *coordinator) refreshSkills(ctx context.Context, provider, model string)
 	if err != nil {
 		return err
 	}
-	c.currentAgent.SetPromptBuild(build)
+	if c.lastPromptText != build.Text || c.skillsPromptDirty {
+		c.currentAgent.SetPromptBuild(build)
+		c.lastPromptText = build.Text
+	}
 	c.skillsPromptDirty = false
 	return nil
 }

@@ -150,7 +150,7 @@ type directoryLister struct {
 
 func NewDirectoryLister(rootPath string) *directoryLister {
 	return &directoryLister{
-		rootPath:         rootPath,
+		rootPath:         filepath.Clean(rootPath),
 		dirPatterns:      csync.NewMap[string, []gitignore.Pattern](),
 		combinedMatchers: csync.NewMap[string, gitignore.Matcher](),
 	}
@@ -270,6 +270,7 @@ func (dl *directoryLister) shouldIgnore(path string, ignorePatterns []string, is
 
 // ListDirectory lists files and directories in the specified path.
 func ListDirectory(initialPath string, ignorePatterns []string, depth, limit int) ([]string, bool, error) {
+	initialPath = filepath.Clean(initialPath)
 	found := csync.NewSlice[string]()
 	dl := NewDirectoryLister(initialPath)
 
@@ -277,7 +278,7 @@ func ListDirectory(initialPath string, ignorePatterns []string, depth, limit int
 
 	conf := fastwalk.Config{
 		Follow:   true,
-		ToSlash:  fastwalk.DefaultToSlash(),
+		ToSlash:  false,
 		Sort:     fastwalk.SortDirsFirst,
 		MaxDepth: depth,
 	}

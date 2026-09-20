@@ -116,7 +116,7 @@ func globWithDoubleStar(ctx context.Context, pattern, searchPath string, limit i
 		// chase cycles, which is slow and can hang. Mirrors the rg path,
 		// which no longer passes -L.
 		Follow:  false,
-		ToSlash: fastwalk.DefaultToSlash(),
+		ToSlash: false,
 		Sort:    fastwalk.SortFilesFirst,
 	}
 	err := fastwalk.Walk(&conf, searchPath, func(path string, d os.DirEntry, err error) error {
@@ -237,7 +237,7 @@ func HasPrefix(path, prefix string) bool {
 		return false
 	}
 	// If path is within prefix, Rel will not return a path starting with ".."
-	return !strings.HasPrefix(rel, "..")
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // ToUnixLineEndings converts Windows line endings (CRLF) to Unix line endings (LF).
