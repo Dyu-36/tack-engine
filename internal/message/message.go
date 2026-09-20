@@ -46,6 +46,7 @@ type CreateMessageParams struct {
 type Service interface {
 	pubsub.Subscriber[Message]
 	Create(ctx context.Context, sessionID string, params CreateMessageParams) (Message, error)
+	CloneToSession(ctx context.Context, sessionID string, source Message) (Message, error)
 	Update(ctx context.Context, message Message) error
 	Get(ctx context.Context, id string) (Message, error)
 	List(ctx context.Context, sessionID string) ([]Message, error)
@@ -194,6 +195,35 @@ func (s *service) Create(ctx context.Context, sessionID string, params CreateMes
 	// concurrent modifications to the Parts slice.
 	s.Publish(pubsub.CreatedEvent, message.Clone())
 	return message, nil
+}
+
+func (s *service) CloneToSession(ctx context.Context, sessionID string, source Message) (Message, error) {
+	partsJSON, err := marshalParts(source.Parts)
+	if err != nil {
+		return Message{}, err
+	}
+	isSummary := int64(0)
+	if source.IsSummaryMessage {
+		isSummary = 1
+	}
+	dbMessage, err := s.q.CreateMessage(ctx, db.CreateMessageParams{
+		ID:               uuid.New().String(),
+		SessionID:        sessionID,
+		Role:             string(source.Role),
+		Parts:            string(partsJSON),
+		Model:            sql.NullString{String: source.Model, Valid: source.Model != ""},
+		Provider:         sql.NullString{String: source.Provider, Valid: source.Provider != ""},
+		IsSummaryMessage: isSummary,
+	})
+	if err != nil {
+		return Message{}, err
+	}
+	cloned, err := s.fromDBItem(dbMessage)
+	if err != nil {
+		return Message{}, err
+	}
+	s.Publish(pubsub.CreatedEvent, cloned.Clone())
+	return cloned, nil
 }
 
 func (s *service) DeleteSessionMessages(ctx context.Context, sessionID string) error {
