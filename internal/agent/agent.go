@@ -755,13 +755,17 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	}
 	trace.EndSpan("history_load", historyStarted)
 
-	// Generate title from the first real (non-shell) user prompt.
-	// can take tens of seconds. Blocking Run on it delays the
-	// response to the caller. Use a detached context so the title
-	// goroutine survives Run's cancel.
 	if !hasUserTextMessage(msgs) {
-		titleCtx := context.WithoutCancel(ctx)
-		go a.GenerateTitle(titleCtx, call.SessionID, call.Prompt)
+		titleCtx, titleCancel := context.WithTimeout(genCtx, 30*time.Second)
+		titleDone := make(chan struct{})
+		go func() {
+			defer close(titleDone)
+			a.GenerateTitle(titleCtx, call.SessionID, call.Prompt)
+		}()
+		defer func() {
+			titleCancel()
+			<-titleDone
+		}()
 	}
 
 	// Add the user message to the session.
@@ -2060,6 +2064,9 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 	var model Model
 	var success bool
 	for _, attempt := range attempts {
+		if ctx.Err() != nil {
+			return
+		}
 		tok := int64(40)
 		if attempt.model.CatwalkCfg.CanReason {
 			tok = attempt.model.CatwalkCfg.DefaultMaxTokens

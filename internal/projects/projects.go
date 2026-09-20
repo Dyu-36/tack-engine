@@ -2,6 +2,7 @@ package projects
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,110 +14,109 @@ import (
 
 const projectsFileName = "projects.json"
 
-// Project represents a tracked project directory.
 type Project struct {
 	Path         string    `json:"path"`
 	DataDir      string    `json:"data_dir"`
 	LastAccessed time.Time `json:"last_accessed"`
 }
 
-// ProjectList holds the list of tracked projects.
 type ProjectList struct {
 	Projects []Project `json:"projects"`
 }
 
 var mu sync.Mutex
 
-// projectsFilePath returns the path to the projects.json file.
 func projectsFilePath() string {
 	return filepath.Join(filepath.Dir(config.GlobalConfigData()), projectsFileName)
 }
 
-// Load reads the projects list from disk.
 func Load() (*ProjectList, error) {
 	mu.Lock()
 	defer mu.Unlock()
+	return loadLocked()
+}
 
-	path := projectsFilePath()
-	data, err := os.ReadFile(path)
+func loadLocked() (*ProjectList, error) {
+	data, err := os.ReadFile(projectsFilePath())
+	if errors.Is(err, os.ErrNotExist) {
+		return &ProjectList{Projects: []Project{}}, nil
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &ProjectList{Projects: []Project{}}, nil
-		}
 		return nil, err
 	}
-
 	var list ProjectList
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, err
 	}
-
 	return &list, nil
 }
 
-// Save writes the projects list to disk.
 func Save(list *ProjectList) error {
 	mu.Lock()
 	defer mu.Unlock()
+	return saveLocked(list)
+}
 
+func saveLocked(list *ProjectList) error {
+	if list == nil {
+		return errors.New("nil project list")
+	}
 	path := projectsFilePath()
-
-	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		return err
 	}
-
-	return os.WriteFile(path, data, 0o600)
-}
-
-// Register adds or updates a project in the list.
-func Register(workingDir, dataDir string) error {
-	list, err := Load()
+	file, err := os.CreateTemp(filepath.Dir(path), ".projects-*")
 	if err != nil {
 		return err
 	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if _, err = file.Write(data); err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(temporary, path)
+}
 
+func Register(workingDir, dataDir string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	list, err := loadLocked()
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-
-	// Check if project already exists
+	for _, project := range list.Projects {
+		if !now.After(project.LastAccessed) {
+			now = project.LastAccessed.Add(time.Nanosecond)
+		}
+	}
 	found := false
-	for i, p := range list.Projects {
-		if p.Path == workingDir {
-			list.Projects[i].DataDir = dataDir
-			list.Projects[i].LastAccessed = now
+	for index, project := range list.Projects {
+		if project.Path == workingDir {
+			list.Projects[index].DataDir = dataDir
+			list.Projects[index].LastAccessed = now
 			found = true
 			break
 		}
 	}
-
 	if !found {
-		list.Projects = append(list.Projects, Project{
-			Path:         workingDir,
-			DataDir:      dataDir,
-			LastAccessed: now,
-		})
+		list.Projects = append(list.Projects, Project{Path: workingDir, DataDir: dataDir, LastAccessed: now})
 	}
-
-	// Sort by last accessed (most recent first)
-	slices.SortFunc(list.Projects, func(a, b Project) int {
-		if a.LastAccessed.After(b.LastAccessed) {
-			return -1
-		}
-		if a.LastAccessed.Before(b.LastAccessed) {
-			return 1
-		}
-		return 0
-	})
-
-	return Save(list)
+	slices.SortFunc(list.Projects, func(a, b Project) int { return b.LastAccessed.Compare(a.LastAccessed) })
+	return saveLocked(list)
 }
 
-// List returns all tracked projects sorted by last accessed.
 func List() ([]Project, error) {
 	list, err := Load()
 	if err != nil {

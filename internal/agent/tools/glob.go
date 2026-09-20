@@ -76,7 +76,6 @@ func NewGlobTool(workingDir string, cfg config.ToolGlob) fantasy.AgentTool {
 			if len(files) == 0 {
 				output = "No files found"
 			} else {
-				normalizeFilePaths(files)
 				output = strings.Join(files, "\n")
 				if truncated {
 					output += "\n\n(Results are truncated. Consider using a more specific path or pattern.)"
@@ -113,12 +112,15 @@ func globFiles(ctx context.Context, pattern, searchPath string, limit int) ([]st
 		cmdRg.Dir = walkRoot
 		matches, err := runRipgrep(cmdRg, walkRoot, limit)
 		if err == nil {
+			normalizeFilePaths(matches)
 			return matches, len(matches) >= limit && limit > 0, nil
 		}
 		slog.Warn("Ripgrep execution failed, falling back to doublestar", "error", err)
 	}
 
-	return fsext.GlobGitignoreAwareCtx(ctx, walkPattern, walkRoot, limit)
+	files, truncated, err := fsext.GlobGitignoreAwareCtx(ctx, walkPattern, walkRoot, limit)
+	normalizeFilePaths(files)
+	return files, truncated, err
 }
 
 func runRipgrep(cmd *exec.Cmd, searchRoot string, limit int) ([]string, error) {
