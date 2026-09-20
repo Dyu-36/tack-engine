@@ -56,8 +56,6 @@ const (
 // Permissions represents a dialog for permission requests.
 type Permissions struct {
 	com          *common.Common
-	windowWidth  int // Terminal window dimensions.
-	windowHeight int
 	fullscreen   bool // true when dialog is fullscreen
 
 	permission     permission.PermissionRequest
