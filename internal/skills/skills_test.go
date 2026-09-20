@@ -279,6 +279,7 @@ func TestDiscoverPiRootMarkdownAndAgentsGroupedMarkdown(t *testing.T) {
 	agentsRoot := filepath.Join(root, ".agents", "skills")
 	require.NoError(t, os.MkdirAll(filepath.Join(agentsRoot, "group"), 0o755))
 	require.NoError(t, os.MkdirAll(piRoot, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(piRoot, "ignored"), 0o755))
 	write := func(path, name string) {
 		require.NoError(t, os.WriteFile(path, []byte("---\nname: "+name+"\ndescription: Discovery test.\n---\n# Test\n"), 0o644))
 	}
