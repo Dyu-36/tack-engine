@@ -210,7 +210,9 @@ func execHandlerOption(blockFuncs []BlockFunc) interp.RunnerOption {
 		handler = mw(handler)
 	}
 	// ExecHandlers always appends DefaultExecHandler which lacks process
-	// group isolation, so we use the deprecated ExecHandler instead.
+	// group isolation, so the singular handler is intentionally retained until
+	// upstream exposes an equivalent custom terminal handler.
+	//lint:ignore SA1019 required for process-group isolation
 	return interp.ExecHandler(handler)
 }
 
