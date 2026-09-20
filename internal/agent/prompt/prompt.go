@@ -405,6 +405,12 @@ func loadContextFiles(paths []string, store *config.ConfigStore, platform string
 		if _, ok := seen[pathKey]; ok {
 			continue
 		}
+		// Do not consume a canonical key for an alias that cannot actually be
+		// read. This matters when tests emulate Windows case-insensitivity on
+		// a case-sensitive host: a later casing of the same path may be valid.
+		if _, err := os.Stat(absolute); err != nil {
+			continue
+		}
 		seen[pathKey] = struct{}{}
 		files := processContextPath(absolute, store)
 		unique := files[:0:0]
