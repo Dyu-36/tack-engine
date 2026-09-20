@@ -17,7 +17,7 @@ type systemResources struct {
 	Append  string
 }
 
-func loadSystemResources(workingDir string) (systemResources, error) {
+func loadSystemResources(workingDir string, projectTrusted bool) (systemResources, error) {
 	global := strings.TrimSpace(os.Getenv("CRUSH_GLOBAL_CONFIG"))
 	if global == "" {
 		dir, err := os.UserConfigDir()
@@ -26,11 +26,16 @@ func loadSystemResources(workingDir string) (systemResources, error) {
 		}
 		global = filepath.Join(dir, "crush")
 	}
-	roots := []string{filepath.Join(workingDir, ".tack"), filepath.Join(workingDir, ".pi")}
+	projectRoots := []string{filepath.Join(workingDir, ".tack"), filepath.Join(workingDir, ".pi")}
 	result := systemResources{}
-	text, found, err := readFirstSystemResource(roots, "SYSTEM.md")
-	if err != nil {
-		return result, err
+	var text string
+	var found bool
+	var err error
+	if projectTrusted {
+		text, found, err = readFirstSystemResource(projectRoots, "SYSTEM.md")
+		if err != nil {
+			return result, err
+		}
 	}
 	if !found {
 		text, found, err = readFirstSystemResource([]string{global}, "SYSTEM.md")
@@ -43,9 +48,12 @@ func loadSystemResources(workingDir string) (systemResources, error) {
 	if err != nil {
 		return result, err
 	}
-	projectAppend, _, err := readFirstSystemResource(roots, "APPEND_SYSTEM.md")
-	if err != nil {
-		return result, err
+	projectAppend := ""
+	if projectTrusted {
+		projectAppend, _, err = readFirstSystemResource(projectRoots, "APPEND_SYSTEM.md")
+		if err != nil {
+			return result, err
+		}
 	}
 	var sections []string
 	for _, section := range []string{globalAppend, projectAppend} {
