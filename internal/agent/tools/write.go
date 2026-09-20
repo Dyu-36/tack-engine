@@ -93,8 +93,8 @@ func NewWriteTool(
 				strings.TrimPrefix(filePath, workingDir),
 			)
 
-		err = os.WriteFile(filePath, []byte(params.Content), 0o644)
-		if err != nil {
+			err = os.WriteFile(filePath, []byte(params.Content), 0o644)
+			if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error writing file: %w", err)
 			}
 
