@@ -73,14 +73,14 @@ printf '{"content":"ok","metadata":{"verified":true}}\n'
 	}
 	tool := Tool{
 		Extension: "test",
-		Source: filepath.Join(root, ManifestName),
+		Source:    filepath.Join(root, ManifestName),
 		Manifest: ToolManifest{
 			Name: "echo", Description: "echo",
 			Parameters: map[string]any{"value": map[string]any{"type": "string"}},
-			Required: []string{"value"},
+			Required:   []string{"value"},
 		},
 		executable: executable,
-		timeout: defaultTimeout,
+		timeout:    defaultTimeout,
 	}
 	call := tool.AgentTool(root)
 	response, err := call.Run(context.Background(), structToToolCall(t, map[string]any{"value": "x"}))
