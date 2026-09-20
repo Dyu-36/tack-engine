@@ -12,7 +12,6 @@ import (
 	"maps"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -23,20 +22,15 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/hyper"
 	"github.com/charmbracelet/crush/internal/agent/notify"
 	"github.com/charmbracelet/crush/internal/agent/prompt"
-	"github.com/charmbracelet/crush/internal/agent/tools"
-	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/discover"
 	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/history"
-	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/log"
-	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
-	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
 
 	"github.com/charmbracelet/crush/internal/session"
@@ -113,14 +107,12 @@ type Coordinator interface {
 }
 
 type coordinator struct {
-	cfg         *config.ConfigStore
-	sessions    session.Service
-	messages    message.Service
-	permissions permission.Service
+	cfg      *config.ConfigStore
+	sessions session.Service
+	messages message.Service
 
 	history     history.Service
 	filetracker filetracker.Service
-	lspManager  *lsp.Manager
 	notify      pubsub.Publisher[notify.Notification]
 	runComplete pubsub.Publisher[notify.RunComplete]
 	interactive bool
@@ -140,14 +132,12 @@ type coordinator struct {
 // struct keeps the constructor self-documenting and avoids a long
 // positional parameter list.
 type CoordinatorOptions struct {
-	Config      *config.ConfigStore
-	Sessions    session.Service
-	Messages    message.Service
-	Permissions permission.Service
+	Config   *config.ConfigStore
+	Sessions session.Service
+	Messages message.Service
 
 	History     history.Service
 	FileTracker filetracker.Service
-	LSPManager  *lsp.Manager
 	Notify      pubsub.Publisher[notify.Notification]
 	RunComplete pubsub.Publisher[notify.RunComplete]
 	Skills      *skills.Manager
@@ -173,14 +163,12 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 	skillTracker := skills.NewTracker(activeSkills)
 
 	c := &coordinator{
-		cfg:         opts.Config,
-		sessions:    opts.Sessions,
-		messages:    opts.Messages,
-		permissions: opts.Permissions,
+		cfg:      opts.Config,
+		sessions: opts.Sessions,
+		messages: opts.Messages,
 
 		history:      opts.History,
 		filetracker:  opts.FileTracker,
-		lspManager:   opts.LSPManager,
 		notify:       opts.Notify,
 		runComplete:  opts.RunComplete,
 		agents:       make(map[string]SessionAgent),
@@ -200,15 +188,17 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 	SetRunTraceKeyDir(c.cfg.Config().Options.DataDirectory)
 
 	// TODO: make this dynamic when we support multiple agents
+	toolsOption := c.toolPromptOption()
 	prompt, err := coderPrompt(
 		prompt.WithWorkingDir(c.cfg.WorkingDir()),
 		prompt.WithSkills(c.skills.ActiveSkills()),
+		toolsOption,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	agent, err := c.buildAgent(ctx, prompt, agentCfg, false)
+	agent, err := c.buildAgent(ctx, prompt, agentCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -235,35 +225,13 @@ func (c *coordinator) RunAccepted(ctx context.Context, accept *AcceptedRun, sess
 func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID string, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
 	runID := RunIDFromContext(ctx)
 	trace := newRunTrace(runID)
+	trace.SetSession(sessionID)
 	readyStarted := trace.StartSpan()
 	if err := c.readyWg.Wait(); err != nil {
 		trace.EndSpan("ready_wait", readyStarted)
 		return nil, err
 	}
 	trace.EndSpan("ready_wait", readyStarted)
-
-	// MCP servers connect asynchronously (see mcp.Initialize).
-	//
-	// Interactive runs never wait for that to finish: the tool list below
-	// is built from whatever is registered right now, servers still
-	// connecting are simply absent from this run's palette, and they are
-	// picked up by later runs once they register and publish
-	// EventToolsListChanged. Blocking here froze the TUI for the duration
-	// of the slowest server's connect timeout whenever a prompt was sent
-	// before initialization finished — most visibly on the first message.
-	//
-	// Non-interactive runs get a single shot at the tool palette, so they
-	// do wait for initialization to settle. The wait is bounded by each
-	// server's own connect timeout, so a hung server cannot stall the run
-	// indefinitely.
-	if !c.interactive {
-		mcpStarted := trace.StartSpan()
-		if err := mcp.WaitForInit(ctx); err != nil {
-			trace.EndSpan("mcp_wait", mcpStarted)
-			return nil, fmt.Errorf("failed to wait for MCP initialization: %w", err)
-		}
-		trace.EndSpan("mcp_wait", mcpStarted)
-	}
 
 	// refresh models before each run
 	modelStarted := trace.StartSpan()
@@ -290,6 +258,10 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 		// Invalid provider options must fail before any provider call;
 		// never degrade to empty options with the user's config lost.
 		return nil, fmt.Errorf("failed to prepare provider options: %w", mergeErr)
+	}
+	trace.SetReasoning(model, mergedOptions)
+	if requested := model.ModelCfg.ReasoningEffort; requested != "" && requested != effectiveReasoningEffort(model) {
+		slog.Info("Reasoning effort resolved to model capability", "requested_effort", requested, "resolved_effort", effectiveReasoningEffort(model), "provider", model.ModelCfg.Provider, "model", model.ModelCfg.Model)
 	}
 
 	if err := c.refreshTokenIfExpired(ctx, providerCfg); err != nil {
@@ -436,6 +408,9 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) (fantasy
 	if err != nil {
 		return options, fmt.Errorf("decode merged provider call options: %w", err)
 	}
+	if err := preserveExtraBodyLayers(mergedOptions, catwalkOpts, providerCfgOpts, cfgOpts); err != nil {
+		return options, err
+	}
 
 	reasoningEffort := effectiveReasoningEffort(model)
 	shouldSetEffort := model.CatwalkCfg.CanReason &&
@@ -527,7 +502,9 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) (fantasy
 					extraBody["thinking"] = map[string]any{"type": "disabled"}
 				}
 			}
-			mergedOptions["extra_body"] = extraBody
+			if err := mergeExtraBodyDefaults(mergedOptions, extraBody); err != nil {
+				return options, err
+			}
 
 		default:
 			switch {
@@ -670,7 +647,9 @@ func getProviderOptions(model Model, providerCfg config.ProviderConfig) (fantasy
 			}
 		}
 
-		mergedOptions["extra_body"] = extraBody
+		if err := mergeExtraBodyDefaults(mergedOptions, extraBody); err != nil {
+			return options, err
+		}
 
 		parsed, err := openaicompat.ParseOptions(mergedOptions)
 		if err != nil {
@@ -749,8 +728,8 @@ func mergeCallOptions(model Model, cfg config.ProviderConfig) (fantasy.ProviderO
 	return modelOptions, temp, topP, topK, freqPenalty, presPenalty, nil
 }
 
-func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, agent config.Agent, isSubAgent bool) (SessionAgent, error) {
-	large, small, err := c.buildAgentModels(ctx, isSubAgent)
+func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, agent config.Agent) (SessionAgent, error) {
+	large, small, err := c.buildAgentModels(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -761,9 +740,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		SmallModel:           small,
 		SystemPromptPrefix:   largeProviderCfg.SystemPromptPrefix,
 		SystemPrompt:         "",
-		IsSubAgent:           isSubAgent,
 		DisableAutoSummarize: c.cfg.Config().Options.DisableAutoSummarize,
-		IsYolo:               c.permissions.SkipRequests(),
 		Sessions:             c.sessions,
 		Messages:             c.messages,
 		Tools:                nil,
@@ -793,7 +770,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	})
 
 	c.readyWg.Go(func() error {
-		tools, err := c.buildTools(initCtx, agent, isSubAgent)
+		tools, err := c.buildTools(initCtx, agent)
 		if err != nil {
 			return err
 		}
@@ -804,130 +781,36 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	return result, nil
 }
 
-func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubAgent bool) ([]fantasy.AgentTool, error) {
-	allSkills, activeSkills := c.skillSnapshot()
-	var allTools []fantasy.AgentTool
-	if slices.Contains(agent.AllowedTools, AgentToolName) {
-		agentTool, err := c.agentTool(ctx)
-		if err != nil {
-			return nil, err
-		}
-		allTools = append(allTools, agentTool)
+// toolPromptOption projects the enabled tool registry into the system prompt:
+// the tool list plus the guideline bullets derived from those same tools.
+func (c *coordinator) toolPromptOption() prompt.Option {
+	allowed := c.cfg.Config().Agents[config.AgentCoder].AllowedTools
+	_, infos := registrySnapshots(allowed)
+	names := make([]string, 0, len(infos))
+	for _, info := range infos {
+		names = append(names, info.Name)
+	}
+	return prompt.WithTools(infos, promptGuidelines(names))
+}
+
+func (c *coordinator) buildTools(_ context.Context, agent config.Agent) ([]fantasy.AgentTool, error) {
+	// Pi-like core: a small, explicit registry of tools. Only these are built;
+	// whatever is registered here is exactly what the model is told about.
+
+	specs, _ := registrySnapshots(agent.AllowedTools)
+	allTools := make([]fantasy.AgentTool, 0, len(specs))
+	for _, spec := range specs {
+		allTools = append(allTools, spec.Build(c))
 	}
 
-	if slices.Contains(agent.AllowedTools, tools.AgenticFetchToolName) {
-		agenticFetchTool, err := c.agenticFetchTool(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		allTools = append(allTools, agenticFetchTool)
-	}
-
-	// Get the model name for the agent
-	modelID := ""
-	if modelCfg, ok := c.cfg.Config().Models[agent.Model]; ok {
-		if model := c.cfg.Config().GetModel(modelCfg.Provider, modelCfg.Model); model != nil {
-			modelID = model.ID
-		}
-	}
-
-	logFile := filepath.Join(c.cfg.Config().Options.DataDirectory, "logs", "crush.log")
-
-	// Build hook runner if PreToolUse hooks are configured.
-	var hookRunner *hooks.Runner
-	if preToolHooks := c.cfg.Config().Hooks[hooks.EventPreToolUse]; len(preToolHooks) > 0 {
-		hookRunner = hooks.NewRunner(preToolHooks, c.cfg.WorkingDir(), c.cfg.WorkingDir())
-	}
-
-	allTools = append(
-		allTools,
-		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.Attribution, modelID),
-		tools.NewCrushInfoTool(c.cfg, c.lspManager, allSkills, activeSkills, c.skillTracker),
-		tools.NewCrushLogsTool(logFile),
-		tools.NewJobOutputTool(),
-		tools.NewJobKillTool(),
-		tools.NewDownloadTool(c.permissions, c.cfg.WorkingDir(), nil),
-		tools.NewEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
-		tools.NewMultiEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
-		tools.NewFetchTool(c.permissions, c.cfg.WorkingDir(), nil),
-		tools.NewGlobTool(c.cfg.WorkingDir(), c.cfg.Config().Tools.Glob),
-		tools.NewGrepTool(c.cfg.WorkingDir(), c.cfg.Config().Tools.Grep),
-		tools.NewLsTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Tools.Ls),
-		tools.NewSourcegraphTool(nil),
-		tools.NewTodosTool(c.sessions),
-		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
-		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
-	)
-
-	// Add LSP tools if user has configured LSPs or auto_lsp is enabled (nil or true).
-	if len(c.cfg.Config().LSP) > 0 || c.cfg.Config().Options.AutoLSP == nil || *c.cfg.Config().Options.AutoLSP {
-		allTools = append(
-			allTools,
-			tools.NewDiagnosticsTool(c.lspManager),
-			tools.NewReferencesTool(c.lspManager),
-			tools.NewLSPRestartTool(c.lspManager),
-			tools.NewSymbolsTool(c.lspManager),
-			tools.NewDefinitionTool(c.lspManager),
-			tools.NewCallHierarchyTool(c.lspManager),
-			tools.NewRenameTool(c.lspManager, c.permissions, c.history, c.filetracker),
-			tools.NewReplaceSymbolTool(c.lspManager, c.permissions, c.history, c.filetracker),
-		)
-	}
-
-	if len(c.cfg.Config().MCP) > 0 {
-		allTools = append(
-			allTools,
-			tools.NewListMCPResourcesTool(c.cfg, c.permissions),
-			tools.NewReadMCPResourceTool(c.cfg, c.permissions),
-		)
-	}
-
-	var filteredTools []fantasy.AgentTool
-	for _, tool := range allTools {
-		if slices.Contains(agent.AllowedTools, tool.Info().Name) {
-			filteredTools = append(filteredTools, tool)
-		}
-	}
-
-	for _, tool := range tools.GetMCPTools(c.permissions, c.cfg, c.cfg.WorkingDir()) {
-		if agent.AllowedMCP == nil {
-			// No MCP restrictions
-			filteredTools = append(filteredTools, tool)
-			continue
-		}
-		if len(agent.AllowedMCP) == 0 {
-			// No MCPs allowed
-			slog.Debug("No MCPs allowed", "tool", tool.Name(), "agent", agent.Name)
-			break
-		}
-
-		for mcp, tools := range agent.AllowedMCP {
-			if mcp != tool.MCP() {
-				continue
-			}
-			if len(tools) == 0 || slices.Contains(tools, tool.MCPToolName()) {
-				filteredTools = append(filteredTools, tool)
-				break
-			}
-			slog.Debug("MCP not allowed", "tool", tool.Name(), "agent", agent.Name)
-		}
-	}
-	slices.SortFunc(filteredTools, func(a, b fantasy.AgentTool) int {
+	slices.SortFunc(allTools, func(a, b fantasy.AgentTool) int {
 		return strings.Compare(a.Info().Name, b.Info().Name)
 	})
-
-	// Wrap tools with hook interception for the top-level agent only.
-	// Sub-agents (the `agent` task tool, `agentic_fetch`, etc.) run
-	// without hook interception to avoid firing the user's hook N times
-	// per delegated turn. The top-level invocation of the sub-agent tool
-	// itself is still wrapped from the coder's side.
-	filteredTools = wrapToolsWithHooks(filteredTools, hookRunner, isSubAgent)
-
-	return filteredTools, nil
+	return allTools, nil
 }
 
 // TODO: when we support multiple agents we need to change this so that we pass in the agent specific model config
-func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Model, Model, error) {
+func (c *coordinator) buildAgentModels(ctx context.Context) (Model, Model, error) {
 	largeModelCfg, ok := c.cfg.Config().Models[config.SelectedModelTypeLarge]
 	if !ok {
 		return Model{}, Model{}, errLargeModelNotSelected
@@ -942,7 +825,7 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 		return Model{}, Model{}, errLargeModelProviderNotConfigured
 	}
 
-	largeProvider, err := c.buildProvider(largeProviderCfg, largeModelCfg, isSubAgent)
+	largeProvider, err := c.buildProvider(largeProviderCfg, largeModelCfg)
 	if err != nil {
 		return Model{}, Model{}, err
 	}
@@ -952,7 +835,7 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 		return Model{}, Model{}, errSmallModelProviderNotConfigured
 	}
 
-	smallProvider, err := c.buildProvider(smallProviderCfg, smallModelCfg, true)
+	smallProvider, err := c.buildProvider(smallProviderCfg, smallModelCfg)
 	if err != nil {
 		return Model{}, Model{}, err
 	}
@@ -1092,7 +975,7 @@ func (c *coordinator) buildVercelProvider(_, apiKey string, headers map[string]s
 	return vercel.New(opts...)
 }
 
-func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers map[string]string, extraBody map[string]any, providerID string, isSubAgent bool) (fantasy.Provider, error) {
+func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers map[string]string, extraBody map[string]any, providerID string) (fantasy.Provider, error) {
 	opts := []openaicompat.Option{
 		openaicompat.WithBaseURL(baseURL),
 		openaicompat.WithAPIKey(apiKey),
@@ -1109,7 +992,7 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 				return copilotResponsesModels[modelID]
 			}),
 		)
-		httpClient = copilot.NewClient(isSubAgent, c.cfg.Config().Options.Debug)
+		httpClient = copilot.NewClient(false, c.cfg.Config().Options.Debug)
 	}
 	if httpClient == nil && c.cfg.Config().Options.Debug {
 		httpClient = log.NewHTTPClient()
@@ -1222,7 +1105,7 @@ func (c *coordinator) isAnthropicThinking(model config.SelectedModel) bool {
 	return err == nil && opts.Thinking != nil
 }
 
-func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model config.SelectedModel, isSubAgent bool) (fantasy.Provider, error) {
+func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model config.SelectedModel) (fantasy.Provider, error) {
 	headers := maps.Clone(providerCfg.ExtraHeaders)
 	if headers == nil {
 		headers = make(map[string]string)
@@ -1280,12 +1163,12 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 			}
 			providerCfg.ExtraBody["tool_stream"] = true
 		}
-		return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent)
+		return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID)
 	default:
 		// Known custom providers (litellm, ollama, omlx) are
 		// openai-compat under the hood.
 		if discover.IsKnownCustomProvider(string(providerCfg.Type)) {
-			return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID, isSubAgent)
+			return c.buildOpenaiCompatProvider(baseURL, apiKey, headers, providerCfg.ExtraBody, providerCfg.ID)
 		}
 		return nil, fmt.Errorf("provider type not supported: %q", providerCfg.Type)
 	}
@@ -1337,7 +1220,7 @@ func (c *coordinator) Model() Model {
 
 func (c *coordinator) UpdateModels(ctx context.Context) error {
 	// build the models again so we make sure we get the latest config
-	large, small, err := c.buildAgentModels(ctx, false)
+	large, small, err := c.buildAgentModels(ctx)
 	if err != nil {
 		return err
 	}
@@ -1351,7 +1234,7 @@ func (c *coordinator) UpdateModels(ctx context.Context) error {
 		return errCoderAgentNotConfigured
 	}
 
-	tools, err := c.buildTools(ctx, agentCfg, false)
+	tools, err := c.buildTools(ctx, agentCfg)
 	if err != nil {
 		return err
 	}
@@ -1381,6 +1264,7 @@ func (c *coordinator) refreshSkills(ctx context.Context, provider, model string)
 	p, err := coderPrompt(
 		prompt.WithWorkingDir(c.cfg.WorkingDir()),
 		prompt.WithSkills(c.skills.ActiveSkills()),
+		c.toolPromptOption(),
 	)
 	if err != nil {
 		return err
@@ -1408,6 +1292,7 @@ func (c *coordinator) RefreshPrompt(ctx context.Context) error {
 	p, err := coderPrompt(
 		prompt.WithWorkingDir(c.cfg.WorkingDir()),
 		prompt.WithSkills(c.skills.ActiveSkills()),
+		c.toolPromptOption(),
 	)
 	if err != nil {
 		return err

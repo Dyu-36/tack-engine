@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/home"
-	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 )
 
@@ -30,6 +29,8 @@ type Prompt struct {
 	platform     string
 	workingDir   string
 	activeSkills []*skills.Skill
+	tools        []ToolInfo
+	guidelines   []string
 }
 
 const dynamicSuffixMarker = "{{/* dynamic-suffix */}}"
@@ -39,13 +40,22 @@ type PromptDat struct {
 	Model              string
 	Config             config.Config
 	WorkingDir         string
-	IsGitRepo          bool
 	Platform           string
 	Date               string
-	GitStatus          string
 	ContextFiles       []ContextFile
 	GlobalContextFiles []ContextFile
 	AvailSkillXML      string
+	Tools              []ToolInfo
+	Guidelines         []string
+	SkillReadTool      string
+}
+
+// ToolInfo is the prompt-facing projection of one enabled tool: its registry
+// name and the one-line snippet rendered under "Available tools". The prompt
+// therefore only ever advertises tools that are actually registered.
+type ToolInfo struct {
+	Name    string
+	Snippet string
 }
 
 type ContextFile struct {
@@ -79,8 +89,8 @@ const (
 	componentModel    = "model"
 	componentContext  = "context"
 	componentSkills   = "skills"
+	componentTools    = "tools"
 	componentDate     = "date"
-	componentGit      = "git"
 )
 
 // Generation captures a labeled content digest for every prompt input
@@ -170,6 +180,16 @@ func WithSkills(active []*skills.Skill) Option {
 	}
 }
 
+// WithTools supplies the enabled tool registry projection and the guideline
+// bullets derived from those tools. Both are rendered into the prompt, so
+// removing a tool from the registry removes it from the prompt as well.
+func WithTools(tools []ToolInfo, guidelines []string) Option {
+	return func(p *Prompt) {
+		p.tools = append([]ToolInfo(nil), tools...)
+		p.guidelines = append([]string(nil), guidelines...)
+	}
+}
+
 func NewPrompt(name, promptTemplate string, opts ...Option) (*Prompt, error) {
 	p := &Prompt{
 		name:     name,
@@ -217,10 +237,10 @@ func (p *Prompt) BuildPrompt(ctx context.Context, provider, model string, store 
 				componentModel:    contentDigest(provider + "\x00" + model),
 				componentContext:  contentDigest(contextManifestDigest(d)),
 				componentSkills:   contentDigest(d.AvailSkillXML),
+				componentTools:    contentDigest(toolManifestDigest(d)),
 			},
 			Dynamic: map[string]string{
 				componentDate: contentDigest(d.Date),
-				componentGit:  contentDigest(fmt.Sprintf("%t\x00%s", d.IsGitRepo, d.GitStatus)),
 			},
 		},
 	}, nil
@@ -253,6 +273,39 @@ func contextManifestDigest(d PromptDat) string {
 	}
 	appendLane("project", d.ContextFiles)
 	appendLane("global", d.GlobalContextFiles)
+	return b.String()
+}
+
+// skillReadTool returns the name of the enabled file-read tool for loading
+// skills, like Pi's skillFileReadTool: the first of read or powershell that
+// is registered. Empty when no file-read tool is enabled, in which case the
+// prompt omits the skills section.
+func skillReadTool(tools []ToolInfo) string {
+	for _, candidate := range []string{"read", "powershell"} {
+		for _, tool := range tools {
+			if tool.Name == candidate {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+// toolManifestDigest renders the enabled tool projection and guideline bullets
+// in order so a registry change rotates the stable generation.
+func toolManifestDigest(d PromptDat) string {
+	var b strings.Builder
+	for _, tool := range d.Tools {
+		b.WriteString(tool.Name)
+		b.WriteByte('\x00')
+		b.WriteString(tool.Snippet)
+		b.WriteByte('\n')
+	}
+	for _, guideline := range d.Guidelines {
+		b.WriteString("rule\x00")
+		b.WriteString(guideline)
+		b.WriteByte('\n')
+	}
 	return b.String()
 }
 
@@ -412,23 +465,17 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 		availSkillXML = skills.ToPromptXML(activeSkills)
 	}
 
-	isGit := isGitRepo(store.WorkingDir())
 	data := PromptDat{
 		Provider:      provider,
 		Model:         model,
 		Config:        *cfg,
 		WorkingDir:    filepath.ToSlash(workingDir),
-		IsGitRepo:     isGit,
 		Platform:      platform,
 		Date:          p.now().Format("1/2/2006"),
 		AvailSkillXML: availSkillXML,
-	}
-	if isGit {
-		var err error
-		data.GitStatus, err = getGitStatus(ctx, store.WorkingDir())
-		if err != nil {
-			return PromptDat{}, err
-		}
+		Tools:         p.tools,
+		Guidelines:    p.guidelines,
+		SkillReadTool: skillReadTool(p.tools),
 	}
 
 	for _, group := range contextFiles {
@@ -438,63 +485,6 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 		data.GlobalContextFiles = append(data.GlobalContextFiles, group.Files...)
 	}
 	return data, nil
-}
-
-func isGitRepo(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, ".git"))
-	return err == nil
-}
-
-func getGitStatus(ctx context.Context, dir string) (string, error) {
-	sh := shell.NewShell(&shell.Options{
-		WorkingDir: dir,
-	})
-	branch, err := getGitBranch(ctx, sh)
-	if err != nil {
-		return "", err
-	}
-	status, err := getGitStatusSummary(ctx, sh)
-	if err != nil {
-		return "", err
-	}
-	commits, err := getGitRecentCommits(ctx, sh)
-	if err != nil {
-		return "", err
-	}
-	return branch + status + commits, nil
-}
-
-func getGitBranch(ctx context.Context, sh *shell.Shell) (string, error) {
-	out, _, err := sh.Exec(ctx, "git branch --show-current 2>/dev/null")
-	if err != nil {
-		return "", nil
-	}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return "", nil
-	}
-	return fmt.Sprintf("Current branch: %s\n", out), nil
-}
-
-func getGitStatusSummary(ctx context.Context, sh *shell.Shell) (string, error) {
-	out, _, err := sh.Exec(ctx, "git status --short 2>/dev/null | head -20")
-	if err != nil {
-		return "", nil
-	}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return "Status: clean\n", nil
-	}
-	return fmt.Sprintf("Status:\n%s\n", out), nil
-}
-
-func getGitRecentCommits(ctx context.Context, sh *shell.Shell) (string, error) {
-	out, _, err := sh.Exec(ctx, "git log --oneline -n 3 2>/dev/null")
-	if err != nil || out == "" {
-		return "", nil
-	}
-	out = strings.TrimSpace(out)
-	return fmt.Sprintf("Recent commits:\n%s\n", out), nil
 }
 
 func (p *Prompt) Name() string {

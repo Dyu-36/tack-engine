@@ -80,68 +80,10 @@ func (p *CreatePermissionRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func unmarshalToolParams(toolName string, raw json.RawMessage) (any, error) {
-	switch toolName {
-	case BashToolName:
-		var params BashPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case DownloadToolName:
-		var params DownloadPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case EditToolName:
-		var params EditPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case WriteToolName:
-		var params WritePermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case MultiEditToolName:
-		var params MultiEditPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case FetchToolName:
-		var params FetchPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case AgenticFetchToolName:
-		var params AgenticFetchPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case ViewToolName:
-		var params ViewPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case LSToolName:
-		var params LSPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	default:
-		// For unknown tools, keep the raw JSON as-is.
-		var generic map[string]any
-		if err := json.Unmarshal(raw, &generic); err != nil {
-			return nil, err
-		}
-		return generic, nil
+func unmarshalToolParams(_ string, raw json.RawMessage) (any, error) {
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		return nil, err
 	}
+	return generic, nil
 }

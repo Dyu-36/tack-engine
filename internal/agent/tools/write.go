@@ -14,11 +14,7 @@ import (
 	"github.com/charmbracelet/crush/internal/diff"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
-	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/history"
-
-	"github.com/charmbracelet/crush/internal/lsp"
-	"github.com/charmbracelet/crush/internal/permission"
 )
 
 //go:embed write.md
@@ -27,12 +23,6 @@ var writeDescription string
 type WriteParams struct {
 	FilePath string `json:"file_path" description:"The path to the file to write"`
 	Content  string `json:"content" description:"The content to write to the file"`
-}
-
-type WritePermissionsParams struct {
-	FilePath   string `json:"file_path"`
-	OldContent string `json:"old_content,omitempty"`
-	NewContent string `json:"new_content,omitempty"`
 }
 
 type WriteResponseMetadata struct {
@@ -44,8 +34,6 @@ type WriteResponseMetadata struct {
 const WriteToolName = "write"
 
 func NewWriteTool(
-	lspManager *lsp.Manager,
-	permissions permission.Service,
 	files history.Service,
 	filetracker filetracker.Service,
 	workingDir string,
@@ -105,37 +93,8 @@ func NewWriteTool(
 				strings.TrimPrefix(filePath, workingDir),
 			)
 
-			p, err := permissions.Request(
-				ctx,
-				permission.CreatePermissionRequest{
-					SessionID:   sessionID,
-					Path:        fsext.PathOrPrefix(filePath, workingDir),
-					ToolCallID:  call.ID,
-					ToolName:    WriteToolName,
-					Action:      "write",
-					Description: fmt.Sprintf("Create file %s", filePath),
-					Params: WritePermissionsParams{
-						FilePath:   filePath,
-						OldContent: oldContent,
-						NewContent: params.Content,
-					},
-				},
-			)
-			if err != nil {
-				return fantasy.ToolResponse{}, err
-			}
-			if !p {
-				resp := NewPermissionDeniedResponse()
-				resp = fantasy.WithResponseMetadata(resp, WriteResponseMetadata{
-					Diff:      diff,
-					Additions: additions,
-					Removals:  removals,
-				})
-				return resp, nil
-			}
-
-			err = os.WriteFile(filePath, []byte(params.Content), 0o644)
-			if err != nil {
+		err = os.WriteFile(filePath, []byte(params.Content), 0o644)
+		if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error writing file: %w", err)
 			}
 
@@ -163,11 +122,8 @@ func NewWriteTool(
 
 			filetracker.RecordRead(ctx, sessionID, filePath)
 
-			notifyLSPs(ctx, lspManager, params.FilePath)
-
 			result := fmt.Sprintf("File successfully written: %s", filePath)
 			result = fmt.Sprintf("<result>\n%s\n</result>", result)
-			result += getDiagnostics(filePath, lspManager)
 			return fantasy.WithResponseMetadata(
 				fantasy.NewTextResponse(result),
 				WriteResponseMetadata{

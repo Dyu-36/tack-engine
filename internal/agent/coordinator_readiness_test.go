@@ -58,7 +58,6 @@ func TestBuildAgentReadinessSurvivesCallerCancellation(t *testing.T) {
 		cfg:         cfg,
 		sessions:    env.sessions,
 		messages:    env.messages,
-		permissions: env.permissions,
 		history:     env.history,
 		filetracker: *env.filetracker,
 	}
@@ -74,7 +73,7 @@ func TestBuildAgentReadinessSurvivesCallerCancellation(t *testing.T) {
 	agentCfg := cfg.Config().Agents[config.AgentCoder]
 
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err = coord.buildAgent(ctx, p, agentCfg, false)
+	_, err = coord.buildAgent(ctx, p, agentCfg)
 	require.NoError(t, err)
 
 	// The caller goes away, mirroring an HTTP handler returning and canceling

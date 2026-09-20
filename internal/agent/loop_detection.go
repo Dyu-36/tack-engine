@@ -3,6 +3,7 @@ package agent
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 
 	"charm.land/fantasy"
@@ -62,12 +63,27 @@ func getToolInteractionSignature(content fantasy.ResponseContent) string {
 		}
 		io.WriteString(h, tc.ToolName)
 		io.WriteString(h, "\x00")
-		io.WriteString(h, tc.Input)
+		io.WriteString(h, normalizedToolInput(tc.ToolName, tc.Input))
 		io.WriteString(h, "\x00")
 		io.WriteString(h, output)
 		io.WriteString(h, "\x00")
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func normalizedToolInput(name, input string) string {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(input), &fields); err != nil || fields == nil {
+		return input
+	}
+	if name == "bash" {
+		delete(fields, "description")
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return input
+	}
+	return string(encoded)
 }
 
 // toolResultOutputString converts a ToolResultOutputContent to a stable string

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -98,6 +99,10 @@ func NewShell(opts *Options) *Shell {
 	// binaries and nested crush instances) can't attach to or release
 	// the parent pane's agent authority.
 	env = withoutHerdrEnv(env)
+	if runtime.GOOS == "windows" {
+		env = withDefaultEnvironment(env, "PYTHONIOENCODING", "utf-8")
+		env = withDefaultEnvironment(env, "PYTHONUTF8", "1")
+	}
 
 	// Allow tools to detect execution by Crush.
 	env = append(env, CrushEnvMarkers()...)
@@ -113,6 +118,16 @@ func NewShell(opts *Options) *Shell {
 		logger:     logger,
 		blockFuncs: opts.BlockFuncs,
 	}
+}
+
+func withDefaultEnvironment(env []string, key, value string) []string {
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(name, key) {
+			return env
+		}
+	}
+	return append(env, key+"="+value)
 }
 
 // Exec executes a command in the shell

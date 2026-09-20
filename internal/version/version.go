@@ -9,8 +9,11 @@ import (
 // Build-time parameters set via -ldflags.
 
 var (
-	Version = "devel"
-	Commit  = "unknown"
+	Version      = "devel"
+	Commit       = "unknown"
+	SourceDigest = ""
+	BuiltAt      = ""
+	Modified     = false
 	// BuildID is a unique identifier for this build. For release builds it
 	// equals Commit; for development builds (go run / go build without
 	// ldflags) it is derived from the executable's modification time, which
@@ -25,6 +28,14 @@ var (
 func init() {
 	info, ok := debug.ReadBuildInfo()
 	if ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" && Commit == "unknown" {
+				Commit = setting.Value
+			}
+			if setting.Key == "vcs.modified" {
+				Modified = setting.Value == "true"
+			}
+		}
 		mainVersion := info.Main.Version
 		if mainVersion != "" && mainVersion != "(devel)" {
 			Version = mainVersion

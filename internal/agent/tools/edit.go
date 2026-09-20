@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,22 +18,19 @@ import (
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/history"
-
-	"github.com/charmbracelet/crush/internal/lsp"
-	"github.com/charmbracelet/crush/internal/permission"
 )
 
-type EditParams struct {
-	FilePath   string `json:"file_path" description:"The absolute path to the file to modify"`
-	OldString  string `json:"old_string" description:"The text to replace"`
-	NewString  string `json:"new_string" description:"The text to replace it with"`
-	ReplaceAll bool   `json:"replace_all,omitempty" description:"Replace all occurrences of old_string (default false)"`
+type EditOperation struct {
+	OldText string `json:"oldText" description:"The exact text to replace"`
+	NewText string `json:"newText" description:"The text to replace it with"`
 }
 
-type EditPermissionsParams struct {
-	FilePath   string `json:"file_path"`
-	OldContent string `json:"old_content,omitempty"`
-	NewContent string `json:"new_content,omitempty"`
+type EditParams struct {
+	FilePath   string          `json:"file_path" description:"The absolute path to the file to modify"`
+	OldString  string          `json:"old_string,omitempty" description:"The text to replace (single-edit form)"`
+	NewString  string          `json:"new_string,omitempty" description:"The text to replace it with (single-edit form)"`
+	ReplaceAll bool            `json:"replace_all,omitempty" description:"Replace all occurrences of old_string (default false, single-edit form only)"`
+	Edits      []EditOperation `json:"edits,omitempty" description:"Multiple find-and-replace operations. Each oldText must match exactly once and the matched regions must not overlap; if any edit fails, nothing is written."`
 }
 
 type EditResponseMetadata struct {
@@ -42,6 +40,36 @@ type EditResponseMetadata struct {
 	NewContent string `json:"new_content,omitempty"`
 }
 
+// Multi-edit compatibility types. The standalone multiedit tool was merged
+// into edit; these remain so the desktop/UI and proto wire schema keep
+// compiling against historical tool calls.
+type MultiEditOperation struct {
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
+}
+
+type MultiEditParams struct {
+	FilePath string               `json:"file_path"`
+	Edits    []MultiEditOperation `json:"edits"`
+}
+
+type FailedEdit struct {
+	Index int    `json:"index"`
+	Error string `json:"error"`
+}
+
+type MultiEditResponseMetadata struct {
+	Additions    int          `json:"additions"`
+	Removals     int          `json:"removals"`
+	OldContent   string       `json:"old_content,omitempty"`
+	NewContent   string       `json:"new_content,omitempty"`
+	EditsApplied int          `json:"edits_applied"`
+	EditsFailed  []FailedEdit `json:"edits_failed,omitempty"`
+}
+
+const MultiEditToolName = "multiedit"
+
 const EditToolName = "edit"
 
 //go:embed edit.md
@@ -49,15 +77,12 @@ var editDescription string
 
 type editContext struct {
 	ctx         context.Context
-	permissions permission.Service
 	files       history.Service
 	filetracker filetracker.Service
 	workingDir  string
 }
 
 func NewEditTool(
-	lspManager *lsp.Manager,
-	permissions permission.Service,
 	files history.Service,
 	filetracker filetracker.Service,
 	workingDir string,
@@ -75,9 +100,15 @@ func NewEditTool(
 			var response fantasy.ToolResponse
 			var err error
 
-			editCtx := editContext{ctx, permissions, files, filetracker, workingDir}
+			editCtx := editContext{ctx, files, filetracker, workingDir}
 
-			if params.OldString == "" {
+			if len(params.Edits) > 0 {
+				if params.OldString != "" || params.NewString != "" {
+					response, err = fantasy.NewTextErrorResponse("provide either edits or old_string/new_string, not both"), nil
+				} else {
+					response, err = applyMultiEdit(editCtx, params.FilePath, params.Edits, call)
+				}
+			} else if params.OldString == "" {
 				response, err = createNewFile(editCtx, params.FilePath, params.NewString, call)
 			} else if params.NewString == "" {
 				response, err = deleteContent(editCtx, params.FilePath, params.OldString, params.ReplaceAll, call)
@@ -89,16 +120,10 @@ func NewEditTool(
 				return response, err
 			}
 			if response.IsError {
-				// Return early if there was an error during content replacement
-				// This prevents unnecessary LSP diagnostics processing
 				return response, nil
 			}
 
-			notifyLSPs(ctx, lspManager, params.FilePath)
-
-			text := fmt.Sprintf("<result>\n%s\n</result>\n", response.Content)
-			text += getDiagnostics(params.FilePath, lspManager)
-			response.Content = text
+			response.Content = fmt.Sprintf("<result>\n%s\n</result>\n", response.Content)
 			return response, nil
 		},
 	)
@@ -130,35 +155,6 @@ func createNewFile(edit editContext, filePath, content string, call fantasy.Tool
 		content,
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
-	p, err := edit.permissions.Request(
-		edit.ctx,
-		permission.CreatePermissionRequest{
-			SessionID:   sessionID,
-			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
-			ToolCallID:  call.ID,
-			ToolName:    EditToolName,
-			Action:      "write",
-			Description: fmt.Sprintf("Create file %s", filePath),
-			Params: EditPermissionsParams{
-				FilePath:   filePath,
-				OldContent: "",
-				NewContent: content,
-			},
-		},
-	)
-	if err != nil {
-		return fantasy.ToolResponse{}, err
-	}
-	if !p {
-		resp := NewPermissionDeniedResponse()
-		resp = fantasy.WithResponseMetadata(resp, EditResponseMetadata{
-			OldContent: "",
-			NewContent: content,
-			Additions:  additions,
-			Removals:   removals,
-		})
-		return resp, nil
-	}
 
 	err = os.WriteFile(filePath, []byte(content), 0o644)
 	if err != nil {
@@ -331,36 +327,6 @@ func deleteContent(edit editContext, filePath, oldString string, replaceAll bool
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
 
-	p, err := edit.permissions.Request(
-		edit.ctx,
-		permission.CreatePermissionRequest{
-			SessionID:   sessionID,
-			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
-			ToolCallID:  call.ID,
-			ToolName:    EditToolName,
-			Action:      "write",
-			Description: fmt.Sprintf("Delete content from file %s", filePath),
-			Params: EditPermissionsParams{
-				FilePath:   filePath,
-				OldContent: oldContent,
-				NewContent: newContent,
-			},
-		},
-	)
-	if err != nil {
-		return fantasy.ToolResponse{}, err
-	}
-	if !p {
-		resp := NewPermissionDeniedResponse()
-		resp = fantasy.WithResponseMetadata(resp, EditResponseMetadata{
-			OldContent: oldContent,
-			NewContent: newContent,
-			Additions:  additions,
-			Removals:   removals,
-		})
-		return resp, nil
-	}
-
 	writeContent := newContent
 	if isCrlf {
 		writeContent, _ = fsext.ToWindowsLineEndings(writeContent)
@@ -404,36 +370,6 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
 
-	p, err := edit.permissions.Request(
-		edit.ctx,
-		permission.CreatePermissionRequest{
-			SessionID:   sessionID,
-			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
-			ToolCallID:  call.ID,
-			ToolName:    EditToolName,
-			Action:      "write",
-			Description: fmt.Sprintf("Replace content in file %s", filePath),
-			Params: EditPermissionsParams{
-				FilePath:   filePath,
-				OldContent: oldContent,
-				NewContent: result,
-			},
-		},
-	)
-	if err != nil {
-		return fantasy.ToolResponse{}, err
-	}
-	if !p {
-		resp := NewPermissionDeniedResponse()
-		resp = fantasy.WithResponseMetadata(resp, EditResponseMetadata{
-			OldContent: oldContent,
-			NewContent: result,
-			Additions:  additions,
-			Removals:   removals,
-		})
-		return resp, nil
-	}
-
 	writeContent := result
 	if isCrlf {
 		writeContent, _ = fsext.ToWindowsLineEndings(writeContent)
@@ -453,3 +389,120 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 		},
 	), nil
 }
+
+type editSpan struct {
+	start, end int
+	index      int
+	newText    string
+}
+
+// applyMultiEdit applies several find-and-replace operations in one call.
+// Every oldText must match exactly once and the matched regions must not
+// overlap; if any edit fails, no change is written.
+func applyMultiEdit(edit editContext, filePath string, edits []EditOperation, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	sessionID, oldContent, isCrlf, resp, err := loadExistingFile(edit, filePath, "session ID is required for editing a file")
+	if err != nil {
+		return fantasy.ToolResponse{}, err
+	}
+	if resp.Content != "" || resp.IsError {
+		return resp, nil
+	}
+
+	var spans []editSpan
+	var whitespaceCorrected bool
+	for i, e := range edits {
+		if e.OldText == "" {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("edit %d: oldText must not be empty; use the write tool to create a file", i+1)), nil
+		}
+		start, end, corrected, found := locateUniqueEdit(oldContent, e.OldText)
+		if !found {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("edit %d: oldText not found in file. Make sure it matches exactly, including whitespace and line breaks", i+1)), nil
+		}
+		if end < 0 {
+			return fantasy.NewTextErrorResponse(fmt.Sprintf("edit %d: oldText appears multiple times in the file. Provide more context to ensure a unique match", i+1)), nil
+		}
+		for _, s := range spans {
+			if start < s.end && end > s.start {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("edit %d: match overlaps with edit %d; make the edits target distinct regions", i+1, s.index+1)), nil
+			}
+		}
+		newText := e.NewText
+		if corrected {
+			newText = adaptIndentation(oldContent[start:end], e.OldText, e.NewText, detectIndentUnit(strings.Split(oldContent, "\n")))
+		}
+		whitespaceCorrected = whitespaceCorrected || corrected
+		spans = append(spans, editSpan{start: start, end: end, index: i, newText: newText})
+	}
+
+	slices.SortFunc(spans, func(a, b editSpan) int { return a.start - b.start })
+	var sb strings.Builder
+	prev := 0
+	for _, s := range spans {
+		sb.WriteString(oldContent[prev:s.start])
+		sb.WriteString(s.newText)
+		prev = s.end
+	}
+	sb.WriteString(oldContent[prev:])
+	newContent := sb.String()
+
+	if newContent == oldContent {
+		return fantasy.NewTextErrorResponse("no changes made - new content is the same as old content"), nil
+	}
+
+	_, additions, removals := diff.GenerateDiff(oldContent, newContent, strings.TrimPrefix(filePath, edit.workingDir))
+
+	writeContent := newContent
+	if isCrlf {
+		writeContent, _ = fsext.ToWindowsLineEndings(writeContent)
+	}
+	if err := commitFileChange(edit, sessionID, filePath, oldContent, writeContent); err != nil {
+		return fantasy.ToolResponse{}, err
+	}
+
+	return fantasy.WithResponseMetadata(
+		fantasy.NewTextResponse(withWhitespaceNote(fmt.Sprintf("Applied %d edits to file: %s", len(edits), filePath), whitespaceCorrected)),
+		EditResponseMetadata{
+			OldContent: oldContent,
+			NewContent: writeContent,
+			Additions:  additions,
+			Removals:   removals,
+		},
+	), nil
+}
+
+// locateUniqueEdit finds the [start, end) byte span in content that old
+// should replace. end >= 0 on a unique match; end == -1 when old matches more
+// than once; found == false when there is no match even after whitespace
+// normalization.
+func locateUniqueEdit(content, old string) (start, end int, corrected, found bool) {
+	count := strings.Count(content, old)
+	if count > 1 {
+		return 0, -1, false, true
+	}
+	if count == 1 {
+		idx := strings.Index(content, old)
+		return idx, idx + len(old), false, true
+	}
+	matches := findNormalizedMatches(content, old)
+	if len(matches) == 0 {
+		return 0, 0, false, false
+	}
+	if len(matches) > 1 {
+		return 0, -1, true, true
+	}
+	lines := strings.Split(content, "\n")
+	m := matches[0]
+	byteStart := 0
+	for i := 0; i < m.startLine; i++ {
+		byteStart += len(lines[i]) + 1
+	}
+	byteEnd := byteStart
+	for i := m.startLine; i <= m.endLine; i++ {
+		byteEnd += len(lines[i])
+		if i < m.endLine {
+			byteEnd++
+		}
+	}
+	return byteStart, byteEnd, true, true
+}
+

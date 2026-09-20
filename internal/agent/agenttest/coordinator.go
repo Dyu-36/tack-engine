@@ -13,7 +13,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
-	"github.com/charmbracelet/crush/internal/permission"
+
 	"github.com/charmbracelet/crush/internal/session"
 )
 
@@ -65,9 +65,8 @@ func NewCoordinator(
 	cfg.Config().Agents[config.AgentCoder] = coderCfg
 
 	return agent.NewCoordinator(ctx, agent.CoordinatorOptions{
-		Config:      cfg,
-		Sessions:    sessions,
-		Messages:    messages,
-		Permissions: permission.NewPermissionService(workingDir, true, nil),
+		Config:   cfg,
+		Sessions: sessions,
+		Messages: messages,
 	})
 }

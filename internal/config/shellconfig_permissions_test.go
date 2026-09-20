@@ -90,5 +90,5 @@ permissions deny bash`)
 	cfg := store.Config()
 	cfg.SetupAgents()
 	require.NotContains(t, cfg.Agents[config.AgentCoder].AllowedTools, "bash")
-	require.Contains(t, cfg.Agents[config.AgentCoder].AllowedTools, "view")
+	require.Contains(t, cfg.Agents[config.AgentCoder].AllowedTools, "read")
 }

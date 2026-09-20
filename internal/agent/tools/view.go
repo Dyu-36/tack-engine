@@ -13,14 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
-	"github.com/charmbracelet/crush/internal/lsp"
-	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/skills"
 )
 
@@ -50,12 +47,6 @@ type ViewParams struct {
 	Limit    int    `json:"limit,omitempty" description:"The number of lines to read (defaults to 200)"`
 }
 
-type ViewPermissionsParams struct {
-	FilePath string `json:"file_path"`
-	Offset   int    `json:"offset"`
-	Limit    int    `json:"limit"`
-}
-
 type ViewResourceType string
 
 const (
@@ -72,7 +63,7 @@ type ViewResponseMetadata struct {
 }
 
 const (
-	ViewToolName     = "view"
+	ViewToolName     = "read"
 	MaxViewSize      = 200 * 1024 // 200KB
 	DefaultReadLimit = 200
 	MaxLineLength    = 2000
@@ -88,8 +79,6 @@ func (e contentTooLargeError) Error() string {
 }
 
 func NewViewTool(
-	lspManager *lsp.Manager,
-	permissions permission.Service,
 	filetracker filetracker.Service,
 	skillTracker *skills.Tracker,
 	workingDir string,
@@ -112,46 +101,16 @@ func NewViewTool(
 			// Handle relative paths
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
 
-			// Check if file is outside working directory and request permission if needed
-			absWorkingDir, err := filepath.Abs(workingDir)
-			if err != nil {
-				return fantasy.ToolResponse{}, fmt.Errorf("error resolving working directory: %w", err)
-			}
-
 			absFilePath, err := filepath.Abs(filePath)
 			if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error resolving file path: %w", err)
 			}
 
-			relPath, err := filepath.Rel(absWorkingDir, absFilePath)
-			isOutsideWorkDir := err != nil || strings.HasPrefix(relPath, "..")
 			isSkillFile := isInSkillsPath(absFilePath, skillsPaths)
 
 			sessionID := GetSessionFromContext(ctx)
 			if sessionID == "" {
-				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for accessing files outside working directory")
-			}
-
-			// Request permission for files outside working directory, unless it's a skill file.
-			if isOutsideWorkDir && !isSkillFile {
-				granted, permReqErr := permissions.Request(
-					ctx,
-					permission.CreatePermissionRequest{
-						SessionID:   sessionID,
-						Path:        absFilePath,
-						ToolCallID:  call.ID,
-						ToolName:    ViewToolName,
-						Action:      "read",
-						Description: fmt.Sprintf("Read file outside working directory: %s", absFilePath),
-						Params:      ViewPermissionsParams(params),
-					},
-				)
-				if permReqErr != nil {
-					return fantasy.ToolResponse{}, permReqErr
-				}
-				if !granted {
-					return NewPermissionDeniedResponse(), nil
-				}
+				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for accessing files")
 			}
 
 			// Check if file exists
@@ -245,8 +204,6 @@ func NewViewTool(
 				return fantasy.NewTextErrorResponse("File content is not valid UTF-8"), nil
 			}
 
-			openInLSPs(ctx, lspManager, filePath)
-			waitForLSPDiagnostics(ctx, lspManager, filePath, 300*time.Millisecond)
 			output := "<file>\n"
 			output += addLineNumbers(content, params.Offset+1)
 
@@ -255,7 +212,6 @@ func NewViewTool(
 					params.Offset+len(strings.Split(content, "\n")))
 			}
 			output += "\n</file>\n"
-			output += getDiagnostics(filePath, lspManager)
 			filetracker.RecordRead(ctx, sessionID, filePath)
 
 			meta := ViewResponseMetadata{

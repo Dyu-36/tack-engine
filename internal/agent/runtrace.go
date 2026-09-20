@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/crush/internal/agent/notify"
+	"github.com/charmbracelet/crush/internal/version"
 )
 
 // requestShapeHMACDomain is the domain-separation prefix for the
@@ -137,8 +138,15 @@ func (p requestShapeProjection) encode() []byte {
 type RunTrace struct {
 	mu sync.Mutex
 
-	runID  string
-	anchor time.Time
+	runID                   string
+	anchor                  time.Time
+	sessionID               string
+	requestedEffort         string
+	resolvedEffort          string
+	modelCalls              []notify.ModelCallTelemetry
+	toolCalls               []notify.ToolCallTelemetry
+	providerAttempts        []notify.ProviderAttemptTelemetry
+	executionRecordsDropped int
 
 	// endedMicros maps span name to its duration in microseconds. It is
 	// only written by EndSpan, so spans that never ended stay absent.
@@ -147,14 +155,14 @@ type RunTrace struct {
 	firstSemantic string
 	// first<Kind>Seen distinguishes "never happened" from "happened
 	// within the first microsecond": the micros value alone cannot.
-	firstReasoningSeen  bool
+	firstReasoningSeen   bool
 	firstReasoningMicros int64
 	firstToolSeen        bool
 	firstToolMicros      int64
 	firstTextSeen        bool
 	firstTextMicros      int64
-	retryCount    int
-	retryDelay    time.Duration
+	retryCount           int
+	retryDelay           time.Duration
 
 	provider        string
 	model           string
@@ -535,15 +543,24 @@ func (t *RunTrace) Snapshot() *notify.RunTelemetry {
 	defer t.mu.Unlock()
 
 	telemetry := &notify.RunTelemetry{
-		RunID:           t.runID,
-		Provider:        t.provider,
-		Model:           t.model,
-		ReasoningEffort: t.reasoningEffort,
-		Attempt:         t.retryCount + t.stepCount,
-		RetryCount:      t.retryCount,
-		TotalMicros:     time.Since(t.anchor).Microseconds(),
-		FirstSemantic:   t.firstSemantic,
-		CacheStatus:     t.cacheStatus,
+		SessionID:                t.sessionID,
+		StartedAt:                t.anchor.UTC().Format(time.RFC3339Nano),
+		EngineBuild:              &notify.BuildTelemetry{ID: version.BuildID, Commit: version.Commit, Modified: version.Modified, SourceDigest: version.SourceDigest, BuiltAt: version.BuiltAt},
+		RequestedReasoningEffort: t.requestedEffort,
+		ResolvedReasoningEffort:  t.resolvedEffort,
+		ModelCalls:               append([]notify.ModelCallTelemetry(nil), t.modelCalls...),
+		ToolCalls:                append([]notify.ToolCallTelemetry(nil), t.toolCalls...),
+		ProviderAttempts:         append([]notify.ProviderAttemptTelemetry(nil), t.providerAttempts...),
+		ExecutionRecordsDropped:  t.executionRecordsDropped,
+		RunID:                    t.runID,
+		Provider:                 t.provider,
+		Model:                    t.model,
+		ReasoningEffort:          t.reasoningEffort,
+		Attempt:                  t.retryCount + t.stepCount,
+		RetryCount:               t.retryCount,
+		TotalMicros:              time.Since(t.anchor).Microseconds(),
+		FirstSemantic:            t.firstSemantic,
+		CacheStatus:              t.cacheStatus,
 	}
 	if telemetry.CacheStatus == "" {
 		telemetry.CacheStatus = notify.CacheUnreported

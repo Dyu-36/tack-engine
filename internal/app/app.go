@@ -685,14 +685,12 @@ func (app *App) initCoderAgent(ctx context.Context, interactive bool) error {
 	}
 	var err error
 	app.AgentCoordinator, err = agent.NewCoordinator(ctx, agent.CoordinatorOptions{
-		Config:      app.config,
-		Sessions:    app.Sessions,
-		Messages:    app.Messages,
-		Permissions: app.Permissions,
+		Config:   app.config,
+		Sessions: app.Sessions,
+		Messages: app.Messages,
 
 		History:     app.History,
 		FileTracker: app.FileTracker,
-		LSPManager:  app.LSPManager,
 		Notify:      app.agentNotifications,
 		RunComplete: app.runCompletions,
 		Skills:      app.Skills,

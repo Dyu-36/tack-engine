@@ -215,8 +215,8 @@ type sessionAgent struct {
 	smallModel         *csync.Value[Model]
 	systemPromptPrefix *csync.Value[string]
 	systemPrompt       *csync.Value[string]
-	promptParts *csync.Value[prompt.Snapshot]
-	tools       *csync.Slice[fantasy.AgentTool]
+	promptParts        *csync.Value[prompt.Snapshot]
+	tools              *csync.Slice[fantasy.AgentTool]
 
 	// generationMu guards the prompt build generation and the per-run
 	// change-reason baselines. SetPromptBuild publishes the current
@@ -630,6 +630,8 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	if trace == nil {
 		trace = newRunTrace(call.RunID)
 	}
+	trace.SetSession(call.SessionID)
+	ctx = context.WithValue(ctx, executionTraceKey{}, trace)
 
 	// genCtx/cancel are the run context and its cancel func, created under
 	// the per-session dispatch mutex below so a concurrent Cancel can observe
@@ -761,7 +763,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	}
 
 	agent := fantasy.NewAgent(
-		largeModel.Model,
+		traceModel(ctx, largeModel, "tool_loop"),
 		fantasy.WithSystemPrompt(runSystemPrompt),
 		fantasy.WithTools(agentTools...),
 		fantasy.WithUserAgent(userAgent),
@@ -930,7 +932,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			}
 
 			// Use latest tools (updated by SetTools when MCP tools change).
-			prepared.Tools = a.tools.Copy()
+			prepared.Tools = traceTools(a.tools.Copy(), trace)
 
 			// Drain queued follow-up prompts for this step. Calls covered
 			// by a cancel recorded while they sat in the queue are dropped:
@@ -1080,7 +1082,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			slog.Info("ModelProvider called",
 				"provider", m.ModelCfg.Provider,
 				"model", m.ModelCfg.Model)
-			return m.Model
+			return tracedModel{LanguageModel: m.Model, selected: m, trace: trace, purpose: "tool_loop"}
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
 			input, wasSanitized := sanitizeToolInput(tc.ToolName, tc.ToolCallID, tc.Input)
@@ -1518,7 +1520,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	}()
 
 	agent := fantasy.NewAgent(
-		largeModel.Model,
+		traceModel(ctx, largeModel, "summarize"),
 		fantasy.WithSystemPrompt(string(summaryPrompt)),
 		fantasy.WithUserAgent(userAgent),
 	)
@@ -1541,7 +1543,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		ProviderOptions: opts,
 		OnAuthRefresh:   onAuthRefresh,
 		ModelProvider: func() fantasy.LanguageModel {
-			return a.largeModel.Get().Model
+			return traceModel(ctx, a.largeModel.Get(), "summarize")
 		},
 		PrepareStep: func(callContext context.Context, options fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
 			prepared.Messages = options.Messages
@@ -2048,7 +2050,7 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 		if maxOutputTokens := maxOutputTokensForModel(m, tok); maxOutputTokens != nil {
 			opts = append(opts, fantasy.WithMaxOutputTokens(*maxOutputTokens))
 		}
-		return fantasy.NewAgent(m.Model, opts...)
+		return fantasy.NewAgent(traceModel(ctx, m, "title"), opts...)
 	}
 
 	streamCall := fantasy.AgentStreamCall{

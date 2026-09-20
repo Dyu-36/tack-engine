@@ -249,8 +249,8 @@ func (m mockFileTracker) ListReadFiles(ctx context.Context, sessionID string) ([
 }
 
 func newViewToolForTest(workingDir string) fantasy.AgentTool {
-	permissions := &mockViewPermissionService{Broker: pubsub.NewBroker[permission.PermissionRequest]()}
-	return NewViewTool(nil, permissions, mockFileTracker{}, nil, workingDir)
+
+	return NewViewTool(mockFileTracker{}, nil, workingDir)
 }
 
 func runViewTool(t *testing.T, tool fantasy.AgentTool, ctx context.Context, params ViewParams) fantasy.ToolResponse {
