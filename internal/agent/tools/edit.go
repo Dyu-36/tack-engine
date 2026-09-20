@@ -505,4 +505,3 @@ func locateUniqueEdit(content, old string) (start, end int, corrected, found boo
 	}
 	return byteStart, byteEnd, true, true
 }
-
