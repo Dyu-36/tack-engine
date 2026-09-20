@@ -471,7 +471,7 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 	var resources systemResources
 	if p.name == "coder" {
 		var err error
-		resources, err = loadSystemResources(workingDir)
+		resources, err = loadSystemResources(workingDir, cfg.Options.IsProjectTrusted())
 		if err != nil {
 			return PromptDat{}, err
 		}
