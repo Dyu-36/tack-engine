@@ -35,3 +35,9 @@ type Todo struct {
 	Status     string `json:"status"`
 	ActiveForm string `json:"active_form"`
 }
+
+
+// ForkSessionRequest identifies the user message that terminates a fork transcript.
+type ForkSessionRequest struct {
+	MessageID string `json:"message_id"`
+}
