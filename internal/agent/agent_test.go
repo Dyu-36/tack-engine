@@ -53,8 +53,11 @@ func setupAgent(t *testing.T, pair modelPair) (SessionAgent, fakeEnv) {
 }
 
 func TestCoderAgent(t *testing.T) {
+	if os.Getenv("CRUSH_RUN_MODEL_CONTRACT_TESTS") != "1" {
+		t.Skip("recorded external-model contract tests are opt-in; deterministic engine tests run by default")
+	}
 	if runtime.GOOS == "windows" {
-		t.Skip("skipping on windows for now")
+		t.Skip("recorded model contract tests are not supported on windows")
 	}
 
 	for _, pair := range modelPairs {
