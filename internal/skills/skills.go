@@ -127,9 +127,6 @@ func (s *Skill) Validate() error {
 		if !namePattern.MatchString(s.Name) {
 			errs = append(errs, errors.New("name must be alphanumeric with hyphens, no leading/trailing/consecutive hyphens"))
 		}
-		if s.Path != "" && !strings.EqualFold(filepath.Base(s.Path), s.Name) {
-			errs = append(errs, fmt.Errorf("name %q must match directory %q", s.Name, filepath.Base(s.Path)))
-		}
 	}
 
 	if s.Description == "" {
@@ -225,62 +222,75 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 	seen := make(map[string]bool)
 	addState := func(name, path string, state DiscoveryState, err error) {
 		mu.Lock()
-		states = append(states, &SkillState{
-			Name:  name,
-			Path:  path,
-			State: state,
-			Err:   err,
-		})
+		states = append(states, &SkillState{Name: name, Path: path, State: state, Err: err})
 		mu.Unlock()
+	}
+	load := func(path string, strict bool) {
+		mu.Lock()
+		if seen[path] {
+			mu.Unlock()
+			return
+		}
+		seen[path] = true
+		mu.Unlock()
+
+		skill, err := Parse(path)
+		if err != nil {
+			if strict {
+				slog.Warn("Failed to parse skill file", "path", path, "error", err)
+				addState("", path, StateError, err)
+			}
+			return
+		}
+		if err := skill.Validate(); err != nil {
+			if strict {
+				slog.Warn("Skill validation failed", "path", path, "error", err)
+				addState(skill.Name, path, StateError, err)
+			}
+			return
+		}
+		slog.Debug("Successfully loaded skill", "name", skill.Name, "path", path)
+		mu.Lock()
+		skills = append(skills, skill)
+		mu.Unlock()
+		addState(skill.Name, path, StateNormal, nil)
 	}
 
 	for _, base := range paths {
-		// We use fastwalk with Follow: true instead of filepath.WalkDir because
-		// WalkDir doesn't follow symlinked directories at any depth—only entry
-		// points. This ensures skills in symlinked subdirectories are discovered.
-		// fastwalk is concurrent, so we protect shared state (seen, skills) with mu.
-		conf := fastwalk.Config{
-			Follow:  true,
-			ToSlash: fastwalk.DefaultToSlash(),
+		info, statErr := os.Stat(base)
+		if statErr == nil && !info.IsDir() {
+			if strings.EqualFold(filepath.Ext(base), ".md") {
+				load(base, strings.EqualFold(filepath.Base(base), SkillFileName))
+			}
+			continue
 		}
-		err := fastwalk.Walk(&conf, base, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				slog.Warn("Failed to walk skills path entry", "base", base, "path", path, "error", err)
-				addState("", path, StateError, err)
+		if statErr != nil {
+			if !os.IsNotExist(statErr) {
+				slog.Warn("Failed to inspect skills path", "path", base, "error", statErr)
+				addState("", base, StateError, statErr)
+			}
+			continue
+		}
+
+		// Pi-compatible discovery: every location accepts recursive SKILL.md
+		// directories. Root Markdown files are also skills everywhere except
+		// .agents/skills; that shared convention instead accepts Markdown files
+		// inside grouping subdirectories.
+		conf := fastwalk.Config{Follow: true, ToSlash: fastwalk.DefaultToSlash()}
+		err := fastwalk.Walk(&conf, base, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				slog.Warn("Failed to walk skills path entry", "base", base, "path", path, "error", walkErr)
+				addState("", path, StateError, walkErr)
 				return nil
 			}
-			// Archived background-review skills are retained for provenance but
-			// must not be rediscovered as active skills. Hermes treats .archive
-			// as an excluded skill directory; keep this exact exclusion narrow.
 			if d.IsDir() && d.Name() == ".archive" {
 				return fastwalk.SkipDir
 			}
-			if d.IsDir() || d.Name() != SkillFileName {
+			candidate, strict := skillCandidate(base, path, d)
+			if !candidate {
 				return nil
 			}
-			mu.Lock()
-			if seen[path] {
-				mu.Unlock()
-				return nil
-			}
-			seen[path] = true
-			mu.Unlock()
-			skill, err := Parse(path)
-			if err != nil {
-				slog.Warn("Failed to parse skill file", "path", path, "error", err)
-				addState("", path, StateError, err)
-				return nil
-			}
-			if err := skill.Validate(); err != nil {
-				slog.Warn("Skill validation failed", "path", path, "error", err)
-				addState(skill.Name, path, StateError, err)
-				return nil
-			}
-			slog.Debug("Successfully loaded skill", "name", skill.Name, "path", path)
-			mu.Lock()
-			skills = append(skills, skill)
-			mu.Unlock()
-			addState(skill.Name, path, StateNormal, nil)
+			load(path, strict)
 			return nil
 		})
 		if err != nil && !os.IsNotExist(err) {
@@ -289,15 +299,43 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 	}
 
 	// fastwalk traversal order is non-deterministic, so sort for stable output.
-	// Sort by path first, then alphabetically by name within each path.
 	slices.SortStableFunc(skills, func(a, b *Skill) int {
 		if c := strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path)); c != 0 {
 			return c
 		}
 		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
-
+	slices.SortStableFunc(states, func(a, b *SkillState) int {
+		return strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
+	})
 	return skills, states
+}
+
+func skillCandidate(base, path string, entry os.DirEntry) (candidate, strict bool) {
+	if entry.IsDir() {
+		return false, false
+	}
+	if strings.EqualFold(entry.Name(), SkillFileName) {
+		return true, true
+	}
+	if !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+		return false, false
+	}
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return false, false
+	}
+	nested := filepath.Dir(rel) != "."
+	if isAgentsSkillsRoot(base) {
+		return nested, false
+	}
+	return !nested, false
+}
+
+func isAgentsSkillsRoot(path string) bool {
+	clean := filepath.Clean(path)
+	return strings.EqualFold(filepath.Base(clean), "skills") &&
+		strings.EqualFold(filepath.Base(filepath.Dir(clean)), ".agents")
 }
 
 // ToPromptXML generates XML for injection into the system prompt.
