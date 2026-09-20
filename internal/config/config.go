@@ -365,6 +365,8 @@ type Options struct {
 	GlobalContextPaths   []string    `json:"global_context_paths,omitempty" jsonschema:"description=Paths to files containing global context information for the AI,default=~/.config/crush/CRUSH.md,default=~/.config/AGENTS.md"`
 	SkillsPaths          []string    `json:"skills_paths,omitempty" jsonschema:"description=Paths to directories containing Agent Skills (folders with SKILL.md files),example=~/.config/crush/skills,example=./skills"`
 	ProjectTrusted       *bool       `json:"project_trusted,omitempty" jsonschema:"description=Whether project-local dynamic resources are trusted. Unset preserves standalone full-trust behavior,default=true"`
+	ExtensionPaths       []string    `json:"extension_paths,omitempty" jsonschema:"description=Additional directories containing Gotack extension manifests"`
+	DisabledExtensions   []string    `json:"disabled_extensions,omitempty" jsonschema:"description=Extension names to disable"`
 	TUI                  *TUIOptions `json:"tui,omitempty" jsonschema:"description=Terminal user interface options"`
 	Debug                bool        `json:"debug,omitempty" jsonschema:"description=Enable debug logging,default=false"`
 	DebugLSP             bool        `json:"debug_lsp,omitempty" jsonschema:"description=Enable debug logging for LSP servers,default=false"`
