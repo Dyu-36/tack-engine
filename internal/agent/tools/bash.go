@@ -49,8 +49,6 @@ const (
 	MaxOutputLength     = 30000
 	ShellNoOutput       = "no output"
 
-	// BashNoOutput is kept for the legacy background-shell job_output tool.
-	BashNoOutput = ShellNoOutput
 )
 
 //go:embed bash.md.tpl
@@ -73,12 +71,6 @@ func bashDescription() string {
 		panic("failed to execute bash description template: " + err.Error())
 	}
 	return out.String()
-}
-
-func NewPermissionDeniedResponse() fantasy.ToolResponse {
-	resp := fantasy.NewTextErrorResponse("User denied permission")
-	resp.StopTurn = true
-	return resp
 }
 
 func NewBashTool(workingDir string) fantasy.AgentTool {

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"html/template"
-	"os/exec"
-	"testing"
 )
 
 type (
@@ -57,31 +55,6 @@ func GetSupportsImagesFromContext(ctx context.Context) bool {
 // GetModelNameFromContext retrieves the model name from the context.
 func GetModelNameFromContext(ctx context.Context) string {
 	return getContextValue(ctx, ModelNameContextKey, "")
-}
-
-var ghAvailable = func() bool {
-	if testing.Testing() {
-		return false
-	}
-	_, err := exec.LookPath("gh")
-	return err == nil
-}()
-
-// toolDescriptionData is the common data structure for tool description templates.
-type toolDescriptionData struct {
-	GhAvailable bool
-}
-
-// renderToolDescription renders a tool description template with the given data.
-func renderToolDescription(tmpl *template.Template) string {
-	data := toolDescriptionData{
-		GhAvailable: ghAvailable,
-	}
-	var out bytes.Buffer
-	if err := tmpl.Execute(&out, data); err != nil {
-		panic("failed to execute tool description template: " + err.Error())
-	}
-	return out.String()
 }
 
 // renderTemplate renders a Go template with the given data.

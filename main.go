@@ -1,35 +1,75 @@
-// Package main is the entry point for the Crush CLI.
-//
-//	@title			Crush API
-//	@version		1.0
-//	@description	Crush is a terminal-based AI coding assistant. This API is served over a Unix socket (or Windows named pipe) and provides programmatic access to workspaces, sessions, agents, LSP, MCP, and more.
-//	@contact.name	Charm
-//	@contact.url	https://charm.sh
-//	@license.name	MIT
-//	@license.url	https://github.com/charmbracelet/crush/blob/main/LICENSE
-//	@BasePath		/v1
 package main
 
 import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
-	"net/http"
-	_ "net/http/pprof"
 	"os"
+	"os/signal"
+	"time"
 
-	"github.com/charmbracelet/crush/internal/cmd"
+	"github.com/charmbracelet/crush/internal/config"
 	_ "github.com/charmbracelet/crush/internal/dns"
-	_ "github.com/joho/godotenv/autoload"
+	"github.com/charmbracelet/crush/internal/server"
 )
 
 func main() {
-	if os.Getenv("CRUSH_PROFILE") != "" {
-		go func() {
-			slog.Info("Serving pprof at localhost:6060")
-			if httpErr := http.ListenAndServe("localhost:6060", nil); httpErr != nil {
-				slog.Error("Failed to pprof listen", "error", httpErr)
-			}
-		}()
+	if err := run(os.Args[1:]); err != nil {
+		slog.Error("tack-engine failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
+	if len(args) == 0 || args[0] != "server" {
+		return errors.New("usage: tack-engine server [--host <address>] [--data-dir <path>] [--debug]")
 	}
 
-	cmd.Execute()
+	flags := flag.NewFlagSet("server", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	host := flags.String("host", server.DefaultHost(), "server host (tcp, unix, or npipe)")
+	flags.StringVar(host, "H", server.DefaultHost(), "server host (shorthand)")
+	dataDir := flags.String("data-dir", "", "custom engine data directory")
+	debug := flags.Bool("debug", false, "enable debug mode")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+
+	cfg, err := config.Load(config.GlobalWorkspaceDir(), *dataDir, *debug)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+	hostURL, err := server.ParseHostURL(*host)
+	if err != nil {
+		return fmt.Errorf("parse host: %w", err)
+	}
+
+	srv := server.NewServer(cfg, hostURL.Scheme, hostURL.Host)
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+
+	select {
+	case <-sigCh:
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, server.ErrServerClosed) {
+			return fmt.Errorf("serve: %w", err)
+		}
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil && !errors.Is(err, server.ErrServerClosed) {
+		return fmt.Errorf("shutdown: %w", err)
+	}
+	return nil
 }

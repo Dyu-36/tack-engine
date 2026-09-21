@@ -165,7 +165,6 @@ func coderAgent(r *vcr.Recorder, env fakeEnv, large, small fantasy.LanguageModel
 		tools.NewEditTool(env.history, *env.filetracker, env.workingDir),
 		tools.NewGlobTool(env.workingDir, cfg.Config().Tools.Glob),
 		tools.NewGrepTool(env.workingDir, cfg.Config().Tools.Grep),
-		tools.NewLsTool(env.permissions, env.workingDir, cfg.Config().Tools.Ls),
 		tools.NewViewTool(*env.filetracker, nil, env.workingDir),
 		tools.NewWriteTool(env.history, *env.filetracker, env.workingDir),
 	}
