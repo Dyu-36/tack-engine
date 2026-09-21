@@ -256,4 +256,3 @@ func (f *ModelsList) VisibleItems() []list.Item {
 func (f *ModelsList) Render() string {
 	return f.List.Render()
 }
-
