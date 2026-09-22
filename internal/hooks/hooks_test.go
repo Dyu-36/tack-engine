@@ -659,9 +659,13 @@ func TestRunnerAbandonRaceSafety(t *testing.T) {
 	t.Cleanup(func() { runShell = origRunShell })
 
 	// Synchronize shutdown with the abandoned goroutine so the test
-	// exits cleanly even under -race.
+	// exits cleanly even under -race. wg.Add happens inside the stub,
+	// so the test must also wait for `entered` before returning:
+	// otherwise a cleanup could restore runShell while the spawned
+	// goroutine is still reading it, which -race flags.
 	var wg sync.WaitGroup
 	release := make(chan struct{})
+	entered := make(chan struct{})
 	t.Cleanup(func() {
 		close(release)
 		wg.Wait()
@@ -670,6 +674,7 @@ func TestRunnerAbandonRaceSafety(t *testing.T) {
 	runShell = func(_ context.Context, opts shell.RunOptions) error {
 		wg.Add(1)
 		defer wg.Done()
+		close(entered)
 		// Write before the caller observes ctx.Done(); the caller will
 		// not read the buffer while we still own it.
 		_, _ = io.WriteString(opts.Stdout, "before\n")
@@ -693,6 +698,12 @@ func TestRunnerAbandonRaceSafety(t *testing.T) {
 	start := time.Now()
 	result, err := r.Run(context.Background(), EventPreToolUse, "sess", "bash", `{}`)
 	elapsed := time.Since(start)
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stubbed shell executor was never entered")
+	}
 
 	require.NoError(t, err)
 	require.Equal(t, DecisionNone, result.Decision)
