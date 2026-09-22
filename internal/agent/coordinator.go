@@ -969,18 +969,18 @@ func (c *coordinator) buildAgentModels(ctx context.Context) (Model, Model, error
 	}
 
 	return Model{
-			Model:               largeModel,
-			CatwalkCfg:          *largeCatwalkModel,
-			ModelCfg:            largeModelCfg,
-			FlatRate:            largeProviderCfg.FlatRate,
-			OmitMaxOutputTokens: omitMaxOutputTokens(largeProviderCfg),
-		}, Model{
-			Model:               smallModel,
-			CatwalkCfg:          *smallCatwalkModel,
-			ModelCfg:            smallModelCfg,
-			FlatRate:            smallProviderCfg.FlatRate,
-			OmitMaxOutputTokens: omitMaxOutputTokens(smallProviderCfg),
-		}, nil
+		Model:               largeModel,
+		CatwalkCfg:          *largeCatwalkModel,
+		ModelCfg:            largeModelCfg,
+		FlatRate:            largeProviderCfg.FlatRate,
+		OmitMaxOutputTokens: omitMaxOutputTokens(largeProviderCfg),
+	}, Model{
+		Model:               smallModel,
+		CatwalkCfg:          *smallCatwalkModel,
+		ModelCfg:            smallModelCfg,
+		FlatRate:            smallProviderCfg.FlatRate,
+		OmitMaxOutputTokens: omitMaxOutputTokens(smallProviderCfg),
+	}, nil
 }
 
 func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {
