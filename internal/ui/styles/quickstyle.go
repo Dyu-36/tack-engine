@@ -10,7 +10,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/crush/internal/ui/diffview"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/exp/charmtone"
 )
@@ -529,59 +528,6 @@ func quickStyle(o quickStyleOpts) Styles {
 		FullKey:        base.Foreground(o.fgMoreSubtle),
 		FullDesc:       base.Foreground(o.fgMostSubtle),
 		FullSeparator:  base.Foreground(o.separator),
-	}
-
-	s.Diff = diffview.Style{
-		DividerLine: diffview.LineStyle{
-			LineNumber: lipgloss.NewStyle().
-				Foreground(o.fgSubtle).
-				Background(o.bgLeastVisible),
-			Code: lipgloss.NewStyle().
-				Foreground(o.fgSubtle).
-				Background(o.bgLeastVisible),
-		},
-		MissingLine: diffview.LineStyle{
-			LineNumber: lipgloss.NewStyle().
-				Background(o.bgLeastVisible),
-			Code: lipgloss.NewStyle().
-				Background(o.bgLeastVisible),
-		},
-		EqualLine: diffview.LineStyle{
-			LineNumber: lipgloss.NewStyle().
-				Foreground(o.fgMoreSubtle).
-				Background(o.bgBase),
-			Code: lipgloss.NewStyle().
-				Foreground(o.fgMoreSubtle).
-				Background(o.bgBase),
-		},
-		InsertLine: diffview.LineStyle{
-			LineNumber: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#629657")).
-				Background(lipgloss.Color("#2b322a")),
-			Symbol: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#629657")).
-				Background(lipgloss.Color("#323931")),
-			Code: lipgloss.NewStyle().
-				Background(lipgloss.Color("#323931")),
-		},
-		DeleteLine: diffview.LineStyle{
-			LineNumber: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#a45c59")).
-				Background(lipgloss.Color("#312929")),
-			Symbol: lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#a45c59")).
-				Background(lipgloss.Color("#383030")),
-			Code: lipgloss.NewStyle().
-				Background(lipgloss.Color("#383030")),
-		},
-		Filename: diffview.LineStyle{
-			LineNumber: lipgloss.NewStyle().
-				Foreground(o.fgSubtle).
-				Background(o.bgLeastVisible),
-			Code: lipgloss.NewStyle().
-				Foreground(o.fgSubtle).
-				Background(o.bgLeastVisible),
-		},
 	}
 
 	s.FilePicker = filepicker.Styles{

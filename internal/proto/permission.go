@@ -57,29 +57,6 @@ func (p *PermissionRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// UnmarshalJSON implements the json.Unmarshaler interface. This is needed
-// because the Params field is of type any, so we need to unmarshal it into
-// its appropriate type based on the [CreatePermissionRequest.ToolName].
-func (p *CreatePermissionRequest) UnmarshalJSON(data []byte) error {
-	type Alias CreatePermissionRequest
-	aux := &struct {
-		Params json.RawMessage `json:"params"`
-		*Alias
-	}{
-		Alias: (*Alias)(p),
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-
-	params, err := unmarshalToolParams(p.ToolName, aux.Params)
-	if err != nil {
-		return err
-	}
-	p.Params = params
-	return nil
-}
-
 func unmarshalToolParams(_ string, raw json.RawMessage) (any, error) {
 	var generic map[string]any
 	if err := json.Unmarshal(raw, &generic); err != nil {

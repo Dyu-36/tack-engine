@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
-	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/fantasy"
@@ -124,13 +124,7 @@ func testSessionAgent(env fakeEnv, large, small fantasy.LanguageModel, systemPro
 }
 
 func coderAgent(r *vcr.Recorder, env fakeEnv, large, small fantasy.LanguageModel) (SessionAgent, error) {
-	fixedTime := func() time.Time {
-		t, _ := time.Parse("1/2/2006", "1/1/2025")
-		return t
-	}
 	prompt, err := coderPrompt(
-		prompt.WithTimeFunc(fixedTime),
-		prompt.WithPlatform("linux"),
 		prompt.WithWorkingDir(filepath.ToSlash(env.workingDir)),
 	)
 	if err != nil {
@@ -159,6 +153,10 @@ func coderAgent(r *vcr.Recorder, env fakeEnv, large, small fantasy.LanguageModel
 	if err != nil {
 		return nil, err
 	}
+
+	// Normalize volatile prompt fields only in the recorded-provider fixture.
+	systemPrompt = regexp.MustCompile(`(?m)^Current date and time: .*`).ReplaceAllString(systemPrompt, "Current date and time: 1/1/2025")
+	systemPrompt = regexp.MustCompile(`(?m)^Current platform: .*`).ReplaceAllString(systemPrompt, "Current platform: linux")
 
 	allTools := []fantasy.AgentTool{
 		tools.NewBashTool(env.workingDir),

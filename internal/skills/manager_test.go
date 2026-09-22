@@ -11,12 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestManager_NoGlobalMirrorByDefault(t *testing.T) {
-	// Not parallel - touches package-level cache.
-	prev := GetLatestStates()
-	t.Cleanup(func() { SetLatestStates(prev) })
-
-	SetLatestStates(nil)
+func TestManager_IndependentSnapshots(t *testing.T) {
+	t.Parallel()
 
 	mgrA := NewManager(nil, nil, []*SkillState{{Name: "a", State: StateNormal}})
 	mgrB := NewManager(nil, nil, []*SkillState{{Name: "b", State: StateNormal}})
@@ -24,57 +20,23 @@ func TestManager_NoGlobalMirrorByDefault(t *testing.T) {
 	mgrA.PublishStates(mgrA.States())
 	mgrB.PublishStates(mgrB.States())
 
-	// Without WithGlobalMirror, the package-level cache must not be
-	// touched by manager construction or PublishStates calls.
-	require.Nil(t, GetLatestStates(), "package global must remain untouched")
 	require.Equal(t, "a", mgrA.States()[0].Name)
 	require.Equal(t, "b", mgrB.States()[0].Name)
 }
 
-func TestManager_GlobalMirror(t *testing.T) {
-	// Not parallel - touches package-level cache.
-	prev := GetLatestStates()
-	t.Cleanup(func() { SetLatestStates(prev) })
-
-	SetLatestStates(nil)
-
-	mgr := NewManager(nil, nil, []*SkillState{{Name: "x", State: StateNormal}}, WithGlobalMirror())
-
-	got := GetLatestStates()
-	require.Len(t, got, 1)
-	require.Equal(t, "x", got[0].Name)
-
-	// PublishStates with mirror enabled forwards to the global cache.
-	mgr.SetLatestStates([]*SkillState{{Name: "y", State: StateNormal}})
-	got = GetLatestStates()
-	require.Len(t, got, 1)
-	require.Equal(t, "y", got[0].Name)
-}
-
 func TestManager_PublishStatesUpdatesCache(t *testing.T) {
-	// Not parallel - exercises WithGlobalMirror, which touches the
-	// package-level cache.
-	prev := GetLatestStates()
-	t.Cleanup(func() { SetLatestStates(prev) })
+	t.Parallel()
 
-	SetLatestStates(nil)
-
-	mgr := NewManager(nil, nil, []*SkillState{{Name: "old"}}, WithGlobalMirror())
+	mgr := NewManager(nil, nil, []*SkillState{{Name: "old"}})
 	t.Cleanup(mgr.Shutdown)
 
-	// PublishStates must update every observable snapshot, not just the
-	// SSE subscribers: Manager.States() (used by workspaceToProto on
-	// the backend) and skills.GetLatestStates() (read by the TUI on the
-	// client process and in local mode) must reflect the new value.
+	// Publishing also updates the workspace snapshot.
 	mgr.PublishStates([]*SkillState{{Name: "new"}})
 
 	got := mgr.States()
 	require.Len(t, got, 1)
 	require.Equal(t, "new", got[0].Name)
 
-	cached := GetLatestStates()
-	require.Len(t, cached, 1)
-	require.Equal(t, "new", cached[0].Name)
 }
 
 func TestManager_SubscribeReceivesPublishedStates(t *testing.T) {
@@ -101,7 +63,7 @@ func TestManager_SubscribeReceivesPublishedStates(t *testing.T) {
 func TestManager_ConcurrentWorkspacesAreIsolated(t *testing.T) {
 	t.Parallel()
 
-	// Two managers without WithGlobalMirror should not see each other's
+	// Two managers should not see each other's
 	// events; this models the multi-workspace backend.
 	mgrA := NewManager(nil, nil, nil)
 	mgrB := NewManager(nil, nil, nil)

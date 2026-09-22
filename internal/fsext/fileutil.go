@@ -13,8 +13,6 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/charlievieth/fastwalk"
 	"github.com/charmbracelet/crush/internal/csync"
-	"github.com/charmbracelet/crush/internal/home"
-	"github.com/charmbracelet/x/ansi"
 )
 
 type FileInfo struct {
@@ -83,18 +81,6 @@ func (w *FastGlobWalker) ShouldSkip(path string) bool {
 // gitignore, crushignore, and hidden file rules.
 func (w *FastGlobWalker) ShouldSkipDir(path string) bool {
 	return w.directoryLister.shouldIgnore(path, nil, true)
-}
-
-// Glob globs files.
-//
-// Does not respect gitignore.
-func Glob(pattern string, cwd string, limit int) ([]string, bool, error) {
-	return globWithDoubleStar(context.Background(), pattern, cwd, limit, false)
-}
-
-// GlobGitignoreAware globs files respecting gitignore.
-func GlobGitignoreAware(pattern string, cwd string, limit int) ([]string, bool, error) {
-	return globWithDoubleStar(context.Background(), pattern, cwd, limit, true)
 }
 
 // GlobGitignoreAwareCtx is like [GlobGitignoreAware] but stops early when ctx
@@ -177,56 +163,6 @@ func globWithDoubleStar(ctx context.Context, pattern, searchPath string, limit i
 		results[i] = m.Path
 	}
 	return results, truncated || errors.Is(err, filepath.SkipAll), nil
-}
-
-// ShouldExcludeFile checks if a file should be excluded from processing
-// based on common patterns and ignore rules.
-func ShouldExcludeFile(rootPath, filePath string) bool {
-	info, err := os.Stat(filePath)
-	isDir := err == nil && info.IsDir()
-	return NewDirectoryLister(rootPath).
-		shouldIgnore(filePath, nil, isDir)
-}
-
-func PrettyPath(path string) string {
-	return home.Short(path)
-}
-
-func DirTrim(pwd string, lim int) string {
-	var (
-		out string
-		sep = string(filepath.Separator)
-	)
-	dirs := strings.Split(pwd, sep)
-	if lim > len(dirs)-1 || lim <= 0 {
-		return pwd
-	}
-	for i := len(dirs) - 1; i > 0; i-- {
-		out = sep + out
-		if i == len(dirs)-1 {
-			out = dirs[i]
-		} else if i >= len(dirs)-lim {
-			// Keep the first grapheme cluster, not the first byte: CJK,
-			// combining marks, and emoji can span multiple bytes and runes,
-			// so a byte or single rune would render the wrong character.
-			first, _ := ansi.FirstGraphemeCluster(dirs[i], ansi.GraphemeWidth)
-			out = first + out
-		} else {
-			out = "..." + out
-			break
-		}
-	}
-	out = filepath.Join("~", out)
-	return out
-}
-
-// PathOrPrefix returns the prefix if the path starts with it, or falls back to
-// the path otherwise.
-func PathOrPrefix(path, prefix string) string {
-	if HasPrefix(path, prefix) {
-		return prefix
-	}
-	return path
 }
 
 // HasPrefix checks if the given path starts with the specified prefix.

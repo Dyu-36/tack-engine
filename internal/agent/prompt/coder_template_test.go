@@ -23,7 +23,7 @@ func coderTemplate(t *testing.T) string {
 func TestCoderTemplateMatchesPiShape(t *testing.T) {
 	t.Parallel()
 
-	p, err := NewPrompt("coder", coderTemplate(t), WithTimeFunc(timeNowStub))
+	p, err := NewPrompt("coder", coderTemplate(t), withTimeFunc(timeNowStub))
 	require.NoError(t, err)
 
 	store := newTestStore(t, t.TempDir())
@@ -78,7 +78,7 @@ func TestCoderTemplateRendersRegistryToolsAndGuidelines(t *testing.T) {
 	p, err := NewPrompt(
 		"coder",
 		coderTemplate(t),
-		WithTimeFunc(timeNowStub),
+		withTimeFunc(timeNowStub),
 		WithTools(tools, guidelines),
 	)
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestCoderTemplateRendersRegistryToolsAndGuidelines(t *testing.T) {
 	skilled, err := NewPrompt(
 		"coder",
 		coderTemplate(t),
-		WithTimeFunc(timeNowStub),
+		withTimeFunc(timeNowStub),
 		WithTools(tools, guidelines),
 		WithSkills([]*skills.Skill{{Name: "demo", Description: "does demo", SkillFilePath: "/x/SKILL.md"}}),
 	)
@@ -111,7 +111,7 @@ func TestCoderTemplateRendersRegistryToolsAndGuidelines(t *testing.T) {
 	unskilled, err := NewPrompt(
 		"coder",
 		coderTemplate(t),
-		WithTimeFunc(timeNowStub),
+		withTimeFunc(timeNowStub),
 		WithSkills([]*skills.Skill{{Name: "demo", Description: "does demo", SkillFilePath: "/x/SKILL.md"}}),
 	)
 	require.NoError(t, err)
@@ -130,7 +130,7 @@ func TestPromptGenerationTracksTools(t *testing.T) {
 		p, err := NewPrompt(
 			"coder",
 			coderTemplate(t),
-			WithTimeFunc(timeNowStub),
+			withTimeFunc(timeNowStub),
 			WithTools(tools, guidelines),
 		)
 		require.NoError(t, err)

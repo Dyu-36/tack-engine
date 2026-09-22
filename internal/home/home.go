@@ -30,14 +30,6 @@ func Config() string {
 	)
 }
 
-// Short replaces the actual home path from [Dir] with `~`.
-func Short(p string) string {
-	if homedir == "" || !strings.HasPrefix(p, homedir) {
-		return p
-	}
-	return filepath.Join("~", strings.TrimPrefix(p, homedir))
-}
-
 // Long replaces the `~` with actual home path from [Dir].
 func Long(p string) string {
 	if homedir == "" || !strings.HasPrefix(p, "~") {

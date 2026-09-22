@@ -9,6 +9,7 @@ import (
 
 // Map is a concurrent map implementation that provides thread-safe access.
 type Map[K comparable, V any] struct {
+	mapSchema[K, V]
 	inner map[K]V
 	mu    sync.RWMutex
 }
@@ -18,25 +19,6 @@ func NewMap[K comparable, V any]() *Map[K, V] {
 	return &Map[K, V]{
 		inner: make(map[K]V),
 	}
-}
-
-// NewMapFrom creates a new thread-safe map from an existing map.
-func NewMapFrom[K comparable, V any](m map[K]V) *Map[K, V] {
-	return &Map[K, V]{
-		inner: m,
-	}
-}
-
-// NewLazyMap creates a new lazy-loaded map. The provided load function is
-// executed in a separate goroutine to populate the map.
-func NewLazyMap[K comparable, V any](load func() map[K]V) *Map[K, V] {
-	m := &Map[K, V]{}
-	m.mu.Lock()
-	go func() {
-		defer m.mu.Unlock()
-		m.inner = load()
-	}()
-	return m
 }
 
 // Reset replaces the inner map with the new one.
@@ -150,12 +132,12 @@ var (
 	_ json.Marshaler   = &Map[string, any]{}
 )
 
-// JSONSchemaAlias returns the underlying map type for JSON schema generation.
-// Value receiver is required because github.com/invopop/jsonschema checks
-// interface satisfaction on the non-pointer type after stripping pointers.
-func (Map[K, V]) JSONSchemaAlias() any { //nolint
-	m := map[K]V{}
-	return m
+// mapSchema provides the value-receiver hook required by schema reflection
+// without copying Map's mutex.
+type mapSchema[K comparable, V any] struct{}
+
+func (mapSchema[K, V]) JSONSchemaAlias() any {
+	return map[K]V{}
 }
 
 // UnmarshalJSON implements json.Unmarshaler.

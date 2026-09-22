@@ -237,3 +237,17 @@ func TestConnect_MigratesLegacyCrushDB(t *testing.T) {
 	require.FileExists(t, filepath.Join(dataDir, "tack.db-wal"))
 	require.NoFileExists(t, crushPath)
 }
+
+// ResetPool closes all pooled connections and clears the pool. This is
+// intended for use in tests to ensure a clean state between test cases.
+func ResetPool() {
+	poolMu.Lock()
+	defer poolMu.Unlock()
+	for path, entry := range pool {
+		entry.db.Close()
+		if entry.lock != nil {
+			entry.lock.release()
+		}
+		delete(pool, path)
+	}
+}

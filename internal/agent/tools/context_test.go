@@ -128,39 +128,6 @@ func TestGetSessionFromContext(t *testing.T) {
 	}
 }
 
-func TestGetMessageFromContext(t *testing.T) {
-	tests := []struct {
-		name string
-		ctx  context.Context
-		want string
-	}{
-		{
-			name: "returns message ID when present",
-			ctx:  context.WithValue(context.Background(), MessageIDContextKey, "msg-456"),
-			want: "msg-456",
-		},
-		{
-			name: "returns empty string when not present",
-			ctx:  context.Background(),
-			want: "",
-		},
-		{
-			name: "returns empty string when wrong type",
-			ctx:  context.WithValue(context.Background(), MessageIDContextKey, 456),
-			want: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := GetMessageFromContext(tt.ctx)
-			if got != tt.want {
-				t.Errorf("GetMessageFromContext() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestGetSupportsImagesFromContext(t *testing.T) {
 	tests := []struct {
 		name string

@@ -26,7 +26,7 @@ func TestCrushIgnore(t *testing.T) {
 	require.True(t, dl.shouldIgnore("test3.tmp", nil, false), ".tmp files should be ignored by common patterns")
 }
 
-func TestShouldExcludeFile(t *testing.T) {
+func TestNewDirectoryLister(t *testing.T) {
 	t.Parallel()
 
 	// Create a temporary directory structure for testing
@@ -57,15 +57,15 @@ func TestShouldExcludeFile(t *testing.T) {
 	}
 
 	// Test that ignored directories are properly ignored
-	require.True(t, ShouldExcludeFile(tempDir, nodeModules), "Expected node_modules to be ignored by .gitignore")
-	require.True(t, ShouldExcludeFile(tempDir, target), "Expected target to be ignored by .gitignore")
-	require.True(t, ShouldExcludeFile(tempDir, customIgnored), "Expected custom_ignored to be ignored by .crushignore")
+	require.True(t, NewDirectoryLister(tempDir).shouldIgnore(nodeModules, nil, true), "Expected node_modules to be ignored by .gitignore")
+	require.True(t, NewDirectoryLister(tempDir).shouldIgnore(target, nil, true), "Expected target to be ignored by .gitignore")
+	require.True(t, NewDirectoryLister(tempDir).shouldIgnore(customIgnored, nil, true), "Expected custom_ignored to be ignored by .crushignore")
 
 	// Test that normal directories are not ignored
-	require.False(t, ShouldExcludeFile(tempDir, normalDir), "Expected src directory to not be ignored")
+	require.False(t, NewDirectoryLister(tempDir).shouldIgnore(normalDir, nil, true), "Expected src directory to not be ignored")
 
 	// Test that the workspace root itself is not ignored
-	require.False(t, ShouldExcludeFile(tempDir, tempDir), "Expected workspace root to not be ignored")
+	require.False(t, NewDirectoryLister(tempDir).shouldIgnore(tempDir, nil, true), "Expected workspace root to not be ignored")
 }
 
 func TestShouldExcludeFileHierarchical(t *testing.T) {
@@ -91,8 +91,8 @@ func TestShouldExcludeFileHierarchical(t *testing.T) {
 	}
 
 	// Test hierarchical ignore behavior - this should work because the .crushignore is in the parent directory
-	require.True(t, ShouldExcludeFile(tempDir, nestedNormal), "Expected normal_nested to be ignored by subdir .crushignore")
-	require.False(t, ShouldExcludeFile(tempDir, subDir), "Expected subdir itself to not be ignored")
+	require.True(t, NewDirectoryLister(tempDir).shouldIgnore(nestedNormal, nil, true), "Expected normal_nested to be ignored by subdir .crushignore")
+	require.False(t, NewDirectoryLister(tempDir).shouldIgnore(subDir, nil, true), "Expected subdir itself to not be ignored")
 }
 
 func TestShouldExcludeFileCommonPatterns(t *testing.T) {
@@ -117,6 +117,6 @@ func TestShouldExcludeFileCommonPatterns(t *testing.T) {
 
 	// Test that common patterns are ignored even without explicit ignore files
 	for _, dir := range commonIgnored {
-		require.True(t, ShouldExcludeFile(tempDir, dir), "Expected %s to be ignored by common patterns", filepath.Base(dir))
+		require.True(t, NewDirectoryLister(tempDir).shouldIgnore(dir, nil, true), "Expected %s to be ignored by common patterns", filepath.Base(dir))
 	}
 }

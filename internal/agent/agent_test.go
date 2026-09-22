@@ -217,88 +217,6 @@ func TestCoderAgent(t *testing.T) {
 				require.NoError(t, err)
 				require.Contains(t, string(content), "hello bash")
 			})
-			t.Run("download tool", func(t *testing.T) {
-				agent, env := setupAgent(t, pair)
-
-				session, err := env.sessions.Create(t.Context(), "New Session")
-				require.NoError(t, err)
-
-				res, err := agent.Run(t.Context(), SessionAgentCall{
-					Prompt:          "download the file from https://example-files.online-convert.com/document/txt/example.txt and save it as example.txt",
-					SessionID:       session.ID,
-					MaxOutputTokens: 10000,
-				})
-				require.NoError(t, err)
-				assert.NotNil(t, res)
-
-				msgs, err := env.messages.List(t.Context(), session.ID)
-				require.NoError(t, err)
-
-				foundDownload := false
-				var downloadTCID string
-
-				for _, msg := range msgs {
-					if msg.Role == message.Assistant {
-						for _, tc := range msg.ToolCalls() {
-							if tc.Name == tools.DownloadToolName {
-								downloadTCID = tc.ID
-							}
-						}
-					}
-					if msg.Role == message.Tool {
-						for _, tr := range msg.ToolResults() {
-							if tr.ToolCallID == downloadTCID {
-								foundDownload = true
-							}
-						}
-					}
-				}
-
-				require.True(t, foundDownload, "Expected to find a download operation")
-
-				examplePath := filepath.Join(env.workingDir, "example.txt")
-				_, err = os.Stat(examplePath)
-				require.NoError(t, err, "Expected example.txt file to exist")
-			})
-			t.Run("fetch tool", func(t *testing.T) {
-				agent, env := setupAgent(t, pair)
-
-				session, err := env.sessions.Create(t.Context(), "New Session")
-				require.NoError(t, err)
-
-				res, err := agent.Run(t.Context(), SessionAgentCall{
-					Prompt:          "fetch the content from https://example-files.online-convert.com/website/html/example.html and tell me if it contains the word 'John Doe'",
-					SessionID:       session.ID,
-					MaxOutputTokens: 10000,
-				})
-				require.NoError(t, err)
-				assert.NotNil(t, res)
-
-				msgs, err := env.messages.List(t.Context(), session.ID)
-				require.NoError(t, err)
-
-				foundFetch := false
-				var fetchTCID string
-
-				for _, msg := range msgs {
-					if msg.Role == message.Assistant {
-						for _, tc := range msg.ToolCalls() {
-							if tc.Name == tools.FetchToolName {
-								fetchTCID = tc.ID
-							}
-						}
-					}
-					if msg.Role == message.Tool {
-						for _, tr := range msg.ToolResults() {
-							if tr.ToolCallID == fetchTCID {
-								foundFetch = true
-							}
-						}
-					}
-				}
-
-				require.True(t, foundFetch, "Expected to find a fetch operation")
-			})
 			t.Run("glob tool", func(t *testing.T) {
 				agent, env := setupAgent(t, pair)
 
@@ -379,47 +297,6 @@ func TestCoderAgent(t *testing.T) {
 
 				require.True(t, foundGrep, "Expected to find a grep operation")
 			})
-			t.Run("ls tool", func(t *testing.T) {
-				agent, env := setupAgent(t, pair)
-
-				session, err := env.sessions.Create(t.Context(), "New Session")
-				require.NoError(t, err)
-
-				res, err := agent.Run(t.Context(), SessionAgentCall{
-					Prompt:          "use ls to list the files in the current directory",
-					SessionID:       session.ID,
-					MaxOutputTokens: 10000,
-				})
-				require.NoError(t, err)
-				assert.NotNil(t, res)
-
-				msgs, err := env.messages.List(t.Context(), session.ID)
-				require.NoError(t, err)
-
-				foundLS := false
-				var lsTCID string
-
-				for _, msg := range msgs {
-					if msg.Role == message.Assistant {
-						for _, tc := range msg.ToolCalls() {
-							if tc.Name == tools.LSToolName {
-								lsTCID = tc.ID
-							}
-						}
-					}
-					if msg.Role == message.Tool {
-						for _, tr := range msg.ToolResults() {
-							if tr.ToolCallID == lsTCID {
-								foundLS = true
-								require.Contains(t, tr.Content, "main.go", "Expected ls to list main.go")
-								require.Contains(t, tr.Content, "go.mod", "Expected ls to list go.mod")
-							}
-						}
-					}
-				}
-
-				require.True(t, foundLS, "Expected to find an ls operation")
-			})
 			t.Run("multiedit tool", func(t *testing.T) {
 				agent, env := setupAgent(t, pair)
 
@@ -463,45 +340,6 @@ func TestCoderAgent(t *testing.T) {
 				content, err := os.ReadFile(mainGoPath)
 				require.NoError(t, err)
 				require.Contains(t, string(content), "Hello, Crush!", "Expected file to contain 'Hello, Crush!'")
-			})
-			t.Run("sourcegraph tool", func(t *testing.T) {
-				agent, env := setupAgent(t, pair)
-
-				session, err := env.sessions.Create(t.Context(), "New Session")
-				require.NoError(t, err)
-
-				res, err := agent.Run(t.Context(), SessionAgentCall{
-					Prompt:          "use sourcegraph to search for 'func main' in Go repositories",
-					SessionID:       session.ID,
-					MaxOutputTokens: 10000,
-				})
-				require.NoError(t, err)
-				assert.NotNil(t, res)
-
-				msgs, err := env.messages.List(t.Context(), session.ID)
-				require.NoError(t, err)
-
-				foundSourcegraph := false
-				var sourcegraphTCID string
-
-				for _, msg := range msgs {
-					if msg.Role == message.Assistant {
-						for _, tc := range msg.ToolCalls() {
-							if tc.Name == tools.SourcegraphToolName {
-								sourcegraphTCID = tc.ID
-							}
-						}
-					}
-					if msg.Role == message.Tool {
-						for _, tr := range msg.ToolResults() {
-							if tr.ToolCallID == sourcegraphTCID {
-								foundSourcegraph = true
-							}
-						}
-					}
-				}
-
-				require.True(t, foundSourcegraph, "Expected to find a sourcegraph operation")
 			})
 			t.Run("write tool", func(t *testing.T) {
 				agent, env := setupAgent(t, pair)
@@ -547,82 +385,6 @@ func TestCoderAgent(t *testing.T) {
 				require.NoError(t, err)
 				require.Contains(t, string(content), "test", "Expected config.json to contain 'test'")
 				require.Contains(t, string(content), "1.0.0", "Expected config.json to contain '1.0.0'")
-			})
-			t.Run("parallel tool calls", func(t *testing.T) {
-				agent, env := setupAgent(t, pair)
-
-				session, err := env.sessions.Create(t.Context(), "New Session")
-				require.NoError(t, err)
-
-				res, err := agent.Run(t.Context(), SessionAgentCall{
-					Prompt:          "use glob to find all .go files and use ls to list the current directory, it is very important that you run both tool calls in parallel",
-					SessionID:       session.ID,
-					MaxOutputTokens: 10000,
-				})
-				require.NoError(t, err)
-				assert.NotNil(t, res)
-
-				msgs, err := env.messages.List(t.Context(), session.ID)
-				require.NoError(t, err)
-
-				var assistantMsg *message.Message
-				var toolMsgs []message.Message
-
-				for _, msg := range msgs {
-					if msg.Role == message.Assistant && len(msg.ToolCalls()) > 0 {
-						assistantMsg = &msg
-					}
-					if msg.Role == message.Tool {
-						toolMsgs = append(toolMsgs, msg)
-					}
-				}
-
-				require.NotNil(t, assistantMsg, "Expected to find an assistant message with tool calls")
-				require.NotNil(t, toolMsgs, "Expected to find a tool message")
-
-				toolCalls := assistantMsg.ToolCalls()
-				require.GreaterOrEqual(t, len(toolCalls), 2, "Expected at least 2 tool calls in parallel")
-
-				foundGlob := false
-				foundLS := false
-				var globTCID, lsTCID string
-
-				for _, tc := range toolCalls {
-					if tc.Name == tools.GlobToolName {
-						foundGlob = true
-						globTCID = tc.ID
-					}
-					if tc.Name == tools.LSToolName {
-						foundLS = true
-						lsTCID = tc.ID
-					}
-				}
-
-				require.True(t, foundGlob, "Expected to find a glob tool call")
-				require.True(t, foundLS, "Expected to find an ls tool call")
-
-				require.GreaterOrEqual(t, len(toolMsgs), 2, "Expected at least 2 tool results in the same message")
-
-				foundGlobResult := false
-				foundLSResult := false
-
-				for _, msg := range toolMsgs {
-					for _, tr := range msg.ToolResults() {
-						if tr.ToolCallID == globTCID {
-							foundGlobResult = true
-							require.Contains(t, tr.Content, "main.go", "Expected glob result to contain main.go")
-							require.False(t, tr.IsError, "Expected glob result to not be an error")
-						}
-						if tr.ToolCallID == lsTCID {
-							foundLSResult = true
-							require.Contains(t, tr.Content, "main.go", "Expected ls result to contain main.go")
-							require.False(t, tr.IsError, "Expected ls result to not be an error")
-						}
-					}
-				}
-
-				require.True(t, foundGlobResult, "Expected to find glob tool result")
-				require.True(t, foundLSResult, "Expected to find ls tool result")
 			})
 		})
 	}
@@ -694,7 +456,7 @@ func TestPreparePrompt_FiltersImageAttachments(t *testing.T) {
 
 	// When supportsImages is false, image attachments should be stripped
 	// from history AND from the files list.
-	history, files, err := agent.preparePrompt(msgs, false, imageAtt)
+	history, files, err := agent.preparePromptForModel(msgs, false, "", "", imageAtt)
 	require.NoError(t, err)
 	require.Len(t, history, 1)
 	require.Len(t, history[0].Content, 1)
@@ -706,7 +468,7 @@ func TestPreparePrompt_FiltersImageAttachments(t *testing.T) {
 
 	// When supportsImages is true, image attachments should remain in
 	// history and be included in the files list.
-	history, files, err = agent.preparePrompt(msgs, true, imageAtt)
+	history, files, err = agent.preparePromptForModel(msgs, true, "", "", imageAtt)
 	require.NoError(t, err)
 	require.Len(t, history, 1)
 	require.Len(t, history[0].Content, 2)
@@ -804,7 +566,7 @@ func TestPreparePrompt_OrphanedToolUse(t *testing.T) {
 	msgs, err := env.messages.List(ctx, sess.ID)
 	require.NoError(t, err)
 
-	history, _, err := agent.preparePrompt(msgs, true)
+	history, _, err := agent.preparePromptForModel(msgs, true, "", "")
 	require.NoError(t, err)
 
 	// The history must contain a synthetic tool result for the orphaned call.
@@ -879,7 +641,7 @@ func TestPreparePrompt_OrphanedToolUseMixed(t *testing.T) {
 	msgs, err := env.messages.List(ctx, sess.ID)
 	require.NoError(t, err)
 
-	history, _, err := agent.preparePrompt(msgs, true)
+	history, _, err := agent.preparePromptForModel(msgs, true, "", "")
 	require.NoError(t, err)
 
 	// Should have a synthetic result only for the orphaned call.

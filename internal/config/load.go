@@ -1222,30 +1222,6 @@ func isShellConfig(path string) bool {
 	return base == appName+"rc" || base == "."+appName+"rc"
 }
 
-// GlobalCacheDir returns the path to the global cache directory for the
-// application.
-func GlobalCacheDir() string {
-	if crushCache := os.Getenv("CRUSH_CACHE_DIR"); crushCache != "" {
-		return crushCache
-	}
-	if xdgCacheHome := os.Getenv("XDG_CACHE_HOME"); xdgCacheHome != "" {
-		return filepath.Join(xdgCacheHome, appName)
-	}
-	if runtime.GOOS == "windows" {
-		localAppData := cmp.Or(
-			os.Getenv("LOCALAPPDATA"),
-			filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local"),
-		)
-		return filepath.Join(localAppData, appName, "cache")
-	}
-	return filepath.Join(home.Dir(), ".cache", appName)
-}
-
-// ProjectConfigs returns list of current project configs paths.
-func ProjectConfigs(cwd string) []string {
-	return lookupConfigs(cwd)
-}
-
 // GlobalConfigData returns the path to the main data directory for the application.
 // this config is used when the app overrides configurations instead of updating the global config.
 func GlobalConfigData() string {

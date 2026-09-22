@@ -19,12 +19,6 @@ func BuiltinFS() embed.FS {
 	return builtinFS
 }
 
-// DiscoverBuiltin finds all valid skills embedded in the binary.
-func DiscoverBuiltin() []*Skill {
-	skills, _ := DiscoverBuiltinWithStates()
-	return skills
-}
-
 // DiscoverBuiltinWithStates is like DiscoverBuiltin but additionally returns
 // a per-file state slice describing parse/validation outcomes. Useful for
 // diagnostics.

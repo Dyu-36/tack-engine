@@ -96,16 +96,6 @@ func ArmInit() {
 	initMu.Unlock()
 }
 
-// DisarmInit undoes ArmInit so WaitForInit stops blocking and returns
-// immediately. It exists for tests in other packages that arm the gate
-// without ever running Initialize and must not leak a permanently-blocking
-// gate into the rest of the test binary. Production code never needs it.
-func DisarmInit() {
-	initMu.Lock()
-	initStarted = false
-	initMu.Unlock()
-}
-
 // renewLock returns the per-server mutex used to serialize session renewals,
 // creating it on first use.
 func renewLock(name string) *sync.Mutex {
@@ -236,11 +226,6 @@ func GetStates() map[string]ClientInfo {
 	return states.Copy()
 }
 
-// GetState returns the state of a specific MCP client
-func GetState(name string) (ClientInfo, bool) {
-	return states.Get(name)
-}
-
 // Close closes all MCP clients. This should be called during application shutdown.
 func Close(ctx context.Context) error {
 	var wg sync.WaitGroup
@@ -332,35 +317,6 @@ func InitializeSingle(ctx context.Context, name string, cfg *config.ConfigStore)
 	}
 
 	return initClient(ctx, cfg, name, m, currentGen(name), cfg.Resolver())
-}
-
-// AuthenticateMCP initiates the OAuth flow for an MCP server that is in
-// StateNeedsAuth. It creates the OAuth handler (which starts a local
-// callback server), connects to the server (which triggers the browser
-// auth flow on 401), and transitions to StateConnected on success.
-func AuthenticateMCP(ctx context.Context, cfg *config.ConfigStore, name string) error {
-	m, exists := cfg.Config().MCP[name]
-	if !exists {
-		return fmt.Errorf("mcp '%s' not found in configuration", name)
-	}
-
-	if !m.OAuth || m.Type != config.MCPHttp {
-		return fmt.Errorf("mcp '%s' does not use OAuth authentication", name)
-	}
-
-	updateState(name, StateStarting, nil, nil, Counts{}, withPending(m))
-
-	// This is the user-initiated flow, so permit the interactive browser
-	// authorization the handler otherwise withholds during startup.
-	ctx = mcpoauth.WithInteractive(ctx)
-
-	// The OAuth handler persists the token automatically as it is
-	// exchanged, so a successful connection has already saved it.
-	_, err := connectAndRegister(ctx, cfg, name, m, currentGen(name), cfg.Resolver(), channelEnabled(cfg.Overrides().EnabledChannels, name))
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 // PendingAuthServer describes an MCP server awaiting OAuth.

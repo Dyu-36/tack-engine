@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/crush/internal/db"
-	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/google/uuid"
 	"github.com/zeebo/xxh3"
@@ -35,16 +34,6 @@ type Todo struct {
 	Content    string     `json:"content"`
 	Status     TodoStatus `json:"status"`
 	ActiveForm string     `json:"active_form"`
-}
-
-// HasIncompleteTodos returns true if there are any non-completed todos.
-func HasIncompleteTodos(todos []Todo) bool {
-	for _, todo := range todos {
-		if todo.Status != TodoStatusCompleted {
-			return true
-		}
-	}
-	return false
 }
 
 type Session struct {
@@ -104,7 +93,6 @@ func (s *service) Create(ctx context.Context, title string) (Session, error) {
 	}
 	session := s.fromDBItem(dbSession)
 	s.Publish(pubsub.CreatedEvent, session)
-	event.SessionCreated()
 	return session, nil
 }
 
@@ -119,7 +107,6 @@ func (s *service) CreateChild(ctx context.Context, parentSessionID, title string
 	}
 	session := s.fromDBItem(dbSession)
 	s.Publish(pubsub.CreatedEvent, session)
-	event.SessionCreated()
 	return session, nil
 }
 
@@ -180,7 +167,6 @@ func (s *service) Delete(ctx context.Context, id string) error {
 	session := s.fromDBItem(dbSession)
 	s.clearEstimatedUsageState(dbSession.ID)
 	s.Publish(pubsub.DeletedEvent, session)
-	event.SessionDeleted()
 	return nil
 }
 

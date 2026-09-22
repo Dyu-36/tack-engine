@@ -11,12 +11,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
-	"charm.land/catwalk/pkg/embedded"
 	"github.com/charmbracelet/crush/internal/agent/hyper"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/home"
@@ -54,41 +52,6 @@ func cachePathFor(name string) string {
 	return filepath.Join(home.Dir(), ".local", "share", appName, name+".json")
 }
 
-// UpdateProviders updates the Catwalk providers list from a specified source.
-func UpdateProviders(pathOrURL string) error {
-	var providers []catwalk.Provider
-	pathOrURL = cmp.Or(pathOrURL, os.Getenv("CATWALK_URL"), defaultCatwalkURL)
-
-	switch {
-	case pathOrURL == "embedded":
-		providers = embedded.GetAll()
-	case strings.HasPrefix(pathOrURL, "http://") || strings.HasPrefix(pathOrURL, "https://"):
-		var err error
-		providers, err = catwalk.NewWithURL(pathOrURL).GetProviders(context.Background(), "")
-		if err != nil {
-			return fmt.Errorf("failed to fetch providers from Catwalk: %w", err)
-		}
-	default:
-		content, err := os.ReadFile(pathOrURL)
-		if err != nil {
-			return fmt.Errorf("failed to read file: %w", err)
-		}
-		if err := json.Unmarshal(content, &providers); err != nil {
-			return fmt.Errorf("failed to unmarshal provider data: %w", err)
-		}
-		if len(providers) == 0 {
-			return fmt.Errorf("no providers found in the provided source")
-		}
-	}
-
-	if err := newCache[[]catwalk.Provider](cachePathFor("providers")).Store(providers); err != nil {
-		return fmt.Errorf("failed to save providers to cache: %w", err)
-	}
-
-	slog.Info("Providers updated successfully", "count", len(providers), "from", pathOrURL, "to", cachePathFor)
-	return nil
-}
-
 // resolveHyperAPIKey returns the Hyper API key from the environment or
 // the raw config value. The env var takes precedence.
 func resolveHyperAPIKey(cfg *Config) string {
@@ -109,42 +72,6 @@ func resolveHyperAPIKey(cfg *Config) string {
 // token. It is passed to Providers so the catalog fetch can retry on
 // 401 without relying on package-global state.
 type HyperTokenRefresher func(context.Context) error
-
-// UpdateHyper updates the Hyper provider information from a specified URL.
-func UpdateHyper(pathOrURL string) error {
-	var provider catwalk.Provider
-	pathOrURL = cmp.Or(pathOrURL, hyper.BaseURL())
-
-	switch {
-	case pathOrURL == "embedded":
-		provider = hyper.Embedded()
-	case strings.HasPrefix(pathOrURL, "http://") || strings.HasPrefix(pathOrURL, "https://"):
-		client := realHyperClient{
-			baseURL:    pathOrURL,
-			resolveKey: func() string { return resolveHyperAPIKey(nil) },
-		}
-		var err error
-		provider, err = client.Get(context.Background(), "")
-		if err != nil {
-			return fmt.Errorf("failed to fetch provider from Hyper: %w", err)
-		}
-	default:
-		content, err := os.ReadFile(pathOrURL)
-		if err != nil {
-			return fmt.Errorf("failed to read file: %w", err)
-		}
-		if err := json.Unmarshal(content, &provider); err != nil {
-			return fmt.Errorf("failed to unmarshal provider data: %w", err)
-		}
-	}
-
-	if err := newCache[catwalk.Provider](cachePathFor("hyper")).Store(provider); err != nil {
-		return fmt.Errorf("failed to save Hyper provider to cache: %w", err)
-	}
-
-	slog.Info("Hyper provider updated successfully", "from", pathOrURL, "to", cachePathFor("hyper"))
-	return nil
-}
 
 var (
 	catwalkSyncer = &catwalkSync{}

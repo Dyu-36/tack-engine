@@ -11,7 +11,6 @@ func TestEstimatedUsageStateSurvivesFetchModifySave(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Cleanup(func() {
 		require.NoError(t, db.Release(dataDir))
-		db.ResetPool()
 	})
 
 	conn, err := db.Connect(t.Context(), dataDir)
@@ -52,7 +51,6 @@ func TestEstimatedUsageStateCanBeClearedByExplicitSave(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Cleanup(func() {
 		require.NoError(t, db.Release(dataDir))
-		db.ResetPool()
 	})
 
 	conn, err := db.Connect(t.Context(), dataDir)

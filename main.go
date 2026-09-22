@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	"github.com/charmbracelet/crush/internal/config"
 	_ "github.com/charmbracelet/crush/internal/dns"
+	"github.com/charmbracelet/crush/internal/log"
 	"github.com/charmbracelet/crush/internal/server"
 )
 
@@ -40,9 +42,17 @@ func run(args []string) error {
 		return fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
 
-	cfg, err := config.Load(config.GlobalWorkspaceDir(), *dataDir, *debug)
+	globalDir := config.GlobalWorkspaceDir()
+	cfg, err := config.Load(globalDir, *dataDir, *debug)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
+	}
+
+	// Configure rotating file logging before anything can log. Best-effort: a
+	// server that cannot open its log file still serves.
+	logPath := filepath.Join(globalDir, "logs", "tack-engine.log")
+	if mkErr := os.MkdirAll(filepath.Dir(logPath), 0o755); mkErr == nil {
+		log.Setup(logPath, *debug)
 	}
 	hostURL, err := server.ParseHostURL(*host)
 	if err != nil {

@@ -120,7 +120,7 @@ func TestUpdateState_ErrorClosesSessionAndClearsTools(t *testing.T) {
 	_, ok = allTools.Get(name)
 	require.False(t, ok, "errored session's tools must be cleared from the registry")
 
-	info, ok := GetState(name)
+	info, ok := GetStates()[name]
 	require.True(t, ok)
 	require.Equal(t, StateError, info.State)
 }
@@ -143,26 +143,26 @@ func TestUpdateState_ConfigBookkeeping(t *testing.T) {
 	// Connecting records the config and clears any pending attempt.
 	updateState(name, StateStarting, nil, nil, Counts{}, withPending(base))
 	updateState(name, StateConnected, nil, nil, Counts{}, withConfig(base))
-	info, _ := GetState(name)
+	info, _ := GetStates()[name]
 	require.Equal(t, base, info.Config, "connected state must record its config")
 	require.Nil(t, info.PendingConfig, "connected state must clear the pending config")
 
 	// Starting records the config the attempt is connecting with.
 	updateState(name, StateStarting, nil, nil, Counts{}, withPending(changed))
-	info, _ = GetState(name)
+	info, _ = GetStates()[name]
 	require.NotNil(t, info.PendingConfig, "starting state must record the pending config")
 	require.Equal(t, changed, *info.PendingConfig)
 	require.Equal(t, base, info.Config, "starting must not disturb the last connected config")
 
 	// An error preserves both so reconcile can still reason about the server.
 	updateState(name, StateError, errors.New("boom"), nil, Counts{})
-	info, _ = GetState(name)
+	info, _ = GetStates()[name]
 	require.Equal(t, base, info.Config, "error must preserve the connected config")
 	require.NotNil(t, info.PendingConfig, "error must preserve the pending config")
 
 	// Disabling clears both so a re-enable with an unchanged config restarts.
 	updateState(name, StateDisabled, nil, nil, Counts{})
-	info, _ = GetState(name)
+	info, _ = GetStates()[name]
 	require.Equal(t, config.MCPConfig{}, info.Config, "disabled must clear the connected config")
 	require.Nil(t, info.PendingConfig, "disabled must clear the pending config")
 }
@@ -215,7 +215,7 @@ func TestGetOrRenewClient_SerializesConcurrentRenewals(t *testing.T) {
 		states.Del(name)
 	})
 
-	cfg := config.NewTestStore(&config.Config{MCP: config.MCPs{name: {Type: config.MCPStdio}}})
+	cfg := config.NewStore(&config.Config{MCP: config.MCPs{name: {Type: config.MCPStdio}}})
 
 	// Seed a dead session so the first ping fails and every worker attempts a
 	// renewal.
@@ -278,7 +278,7 @@ func TestRegisterSessionTools_PopulatesRegistry(t *testing.T) {
 	sess, _ := liveSession(t, "send_message")
 	t.Cleanup(func() { _ = sess.Close() })
 
-	cfg := config.NewTestStore(&config.Config{MCP: config.MCPs{name: {Type: config.MCPStdio}}})
+	cfg := config.NewStore(&config.Config{MCP: config.MCPs{name: {Type: config.MCPStdio}}})
 
 	count, err := registerSessionTools(context.Background(), cfg, name, sess)
 	require.NoError(t, err)
@@ -307,7 +307,7 @@ func TestSessionErrorThenRenew_RestoresTools(t *testing.T) {
 		states.Del(name)
 	})
 
-	cfg := config.NewTestStore(&config.Config{MCP: config.MCPs{name: {Type: config.MCPStdio}}})
+	cfg := config.NewStore(&config.Config{MCP: config.MCPs{name: {Type: config.MCPStdio}}})
 
 	// 1. Initial connect registers the tool (mirrors initClient).
 	sess1, _ := liveSession(t, "send_message")
@@ -357,7 +357,7 @@ func TestGetOrRenewClient_RestoresPromptsAndResources(t *testing.T) {
 		states.Del(name)
 	})
 
-	cfg := config.NewTestStore(&config.Config{MCP: config.MCPs{name: {Type: config.MCPStdio}}})
+	cfg := config.NewStore(&config.Config{MCP: config.MCPs{name: {Type: config.MCPStdio}}})
 
 	// Seed a dead session so the renewal path runs.
 	dead, _ := liveSession(t, "send_message")
@@ -389,7 +389,7 @@ func TestGetOrRenewClient_RestoresPromptsAndResources(t *testing.T) {
 	require.True(t, ok, "resources must be restored on renewal")
 	require.Len(t, resources, 1)
 
-	info, ok := GetState(name)
+	info, ok := GetStates()[name]
 	require.True(t, ok)
 	require.Equal(t, StateConnected, info.State)
 	require.Equal(t, Counts{Tools: 1, Prompts: 1, Resources: 1}, info.Counts,

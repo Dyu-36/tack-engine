@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net/http"
 	"os"
 	"regexp"
@@ -44,6 +43,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
+	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
@@ -238,6 +238,10 @@ type sessionAgent struct {
 	notify               pubsub.Publisher[notify.Notification]
 	runComplete          pubsub.Publisher[notify.RunComplete]
 
+	// hooks runs the workspace's PreToolUse hook commands around every tool
+	// call. Nil when no hook config is present.
+	hooks *hooks.Runner
+
 	messageQueue   *csync.Map[string, []SessionAgentCall]
 	activeRequests *csync.Map[string, *activeCancel]
 
@@ -292,6 +296,7 @@ type SessionAgentOptions struct {
 	Tools                []fantasy.AgentTool
 	Notify               pubsub.Publisher[notify.Notification]
 	RunComplete          pubsub.Publisher[notify.RunComplete]
+	Hooks                *hooks.Runner
 }
 
 func NewSessionAgent(
@@ -311,6 +316,7 @@ func NewSessionAgent(
 		isYolo:               opts.IsYolo,
 		notify:               opts.Notify,
 		runComplete:          opts.RunComplete,
+		hooks:                opts.Hooks,
 		messageQueue:         csync.NewMap[string, []SessionAgentCall](),
 		activeRequests:       csync.NewMap[string, *activeCancel](),
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
@@ -526,16 +532,6 @@ func (a *sessionAgent) clearQueueAndNotify(sessionID string) {
 		return
 	}
 	a.publishCanceledQueueDrops(queued)
-}
-
-// clearPendingCancel removes any pending-cancel mark for sessionID. It
-// takes the per-session dispatch lock so it is ordered against Cancel
-// and the dispatch handoff.
-func (a *sessionAgent) clearPendingCancel(sessionID string) {
-	mu := a.sessionMu(sessionID)
-	mu.Lock()
-	defer mu.Unlock()
-	a.cancelMark.Del(sessionID)
 }
 
 // canceledBySeq reports whether an accepted handle or queued call with
@@ -867,9 +863,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		trace.SetPromptParts(parts.StablePrefix, parts.DynamicSuffix+mcpInstructionBlock(instructions.String()))
 	}
 
-	startTime := time.Now()
-	a.eventPromptSent(call.SessionID)
-
 	var stepMessages []fantasy.Message
 	var shouldSummarize bool
 	var aggregateInputTokens int64
@@ -915,7 +908,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			}
 
 			// Use latest tools (updated by SetTools when MCP tools change).
-			prepared.Tools = traceTools(agentTools, trace)
+			prepared.Tools = traceTools(agentTools, trace, a.hooks, call.SessionID)
 
 			// Drain queued follow-up prompts for this step. Calls covered
 			// by a cancel recorded while they sat in the queue are dropped:
@@ -987,7 +980,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			if err != nil {
 				return callContext, prepared, err
 			}
-			callContext = context.WithValue(callContext, tools.MessageIDContextKey, assistantMsg.ID)
 			callContext = context.WithValue(callContext, tools.SupportsImagesContextKey, largeModel.CatwalkCfg.SupportsImages)
 			callContext = context.WithValue(callContext, tools.ModelNameContextKey, largeModel.CatwalkCfg.Name)
 			currentAssistant = &assistantMsg
@@ -1157,7 +1149,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				trace.RecordCacheUsage(&cached, &uncached)
 			}
 			a.updateSessionUsage(largeModel, &updatedSession, usage, a.openrouterCost(stepResult.ProviderMetadata), estimated)
-			extractHyperCredits(stepResult.ProviderMetadata)
 			_, sessionErr := a.sessions.Save(ctx, updatedSession)
 			if sessionErr != nil {
 				return sessionErr
@@ -1197,8 +1188,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		},
 	})
 	trace.EndSpan("stream", streamStarted)
-
-	a.eventPromptResponded(call.SessionID, time.Since(startTime).Truncate(time.Second))
 
 	if err != nil {
 		isHyper := largeModel.ModelCfg.Provider == hyper.Name
@@ -1586,7 +1575,6 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 			}
 			openrouterCost = &newCost
 		}
-		extractHyperCredits(step.ProviderMetadata)
 	}
 
 	a.updateSessionUsage(largeModel, &currentSession, resp.TotalUsage, openrouterCost, false)
@@ -1663,10 +1651,6 @@ func (a *sessionAgent) createUserMessage(ctx context.Context, call SessionAgentC
 		return message.Message{}, fmt.Errorf("failed to create user message: %w", err)
 	}
 	return msg, nil
-}
-
-func (a *sessionAgent) preparePrompt(msgs []message.Message, supportsImages bool, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart, error) {
-	return a.preparePromptForModel(msgs, supportsImages, "", "", attachments...)
 }
 
 func (a *sessionAgent) preparePromptForModel(msgs []message.Message, supportsImages bool, provider, modelID string, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart, error) {
@@ -2122,7 +2106,6 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 			}
 			openrouterCost = &newCost
 		}
-		extractHyperCredits(step.ProviderMetadata)
 	}
 
 	modelConfig := model.CatwalkCfg
@@ -2167,25 +2150,6 @@ func (a *sessionAgent) openrouterCost(metadata fantasy.ProviderMetadata) *float6
 	return &opts.Usage.Cost
 }
 
-// extractHyperCredits reads usage.remaining.hypercredits from OpenAI
-// provider metadata and stores it for the next FetchCredits call.
-func extractHyperCredits(metadata fantasy.ProviderMetadata) {
-	openaiMeta, ok := metadata[openai.Name]
-	if !ok {
-		return
-	}
-	pm, ok := openaiMeta.(*openai.ProviderMetadata)
-	if !ok {
-		return
-	}
-	var remaining struct {
-		Hypercredits float64 `json:"hypercredits"`
-	}
-	if pm.ExtraField("remaining", &remaining) && remaining.Hypercredits > 0 {
-		hyper.SetBalance(int(math.Round(remaining.Hypercredits)))
-	}
-}
-
 func (a *sessionAgent) updateSessionUsage(model Model, session *session.Session, usage fantasy.Usage, overrideCost *float64, estimated bool) {
 	if !usageIsZero(usage) {
 		session.EstimatedUsage = estimated
@@ -2196,10 +2160,6 @@ func (a *sessionAgent) updateSessionUsage(model Model, session *session.Session,
 		modelConfig.CostPer1MOutCached/1e6*float64(usage.CacheReadTokens) +
 		modelConfig.CostPer1MIn/1e6*float64(usage.InputTokens) +
 		modelConfig.CostPer1MOut/1e6*float64(usage.OutputTokens)
-
-	if !estimated {
-		a.eventTokensUsed(session.ID, model, usage, cost)
-	}
 
 	if estimated {
 		cost = 0

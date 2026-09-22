@@ -1,3 +1,8 @@
+//go:build gotacktest
+
+// Test-only Backend harness. Compiled only with the gotacktest build tag so
+// the shipped engine binary never carries it; other packages drive synthetic
+// workspaces through it in-process.
 package backend
 
 import "context"

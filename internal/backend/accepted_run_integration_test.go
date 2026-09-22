@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openaicompat"
 	"github.com/charmbracelet/crush/internal/agent"
-	"github.com/charmbracelet/crush/internal/agent/agenttest"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/db"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/proto"
@@ -36,12 +38,59 @@ func (c *gatedCoordinator) RunAccepted(ctx context.Context, accept *agent.Accept
 	return c.Coordinator.RunAccepted(ctx, accept, sessionID, prompt, attachments...)
 }
 
+// newTestCoordinator builds a real agent.Coordinator through the
+// production agent.NewCoordinator constructor so the RunAccepted /
+// BeginAccepted / run path is the actual code under test.
+//
+// It installs a minimal config with a single openai-compatible provider
+// whose model resolves offline. run rebuilds the model on every call, so
+// the provider must construct without network I/O; the cancel-on-entry
+// path this test exercises returns before any model call, so no request
+// is ever issued. The coder agent's allowed-tools list is cleared to
+// keep tool construction cheap and free of sub-agent wiring. The
+// optional coordinator dependencies (history, filetracker, LSP, notify,
+// runComplete, skills) are nil: run guards the publisher fields and the
+// cancel-on-entry path never touches the others.
+func newTestCoordinator(ctx context.Context, workingDir string, sessions session.Service, messages message.Service) (agent.Coordinator, error) {
+	cfg, err := config.Init(workingDir, "", false)
+	if err != nil {
+		return nil, err
+	}
+
+	const (
+		providerID = "test-openai-compat"
+		modelID    = "test-model"
+	)
+	cfg.Config().Providers.Set(providerID, config.ProviderConfig{
+		ID:      providerID,
+		Name:    "Test",
+		Type:    openaicompat.Name,
+		BaseURL: "http://127.0.0.1:0/v1",
+		APIKey:  "test",
+		Models:  []catwalk.Model{{ID: modelID, DefaultMaxTokens: 4096}},
+	})
+	selected := config.SelectedModel{Provider: providerID, Model: modelID}
+	cfg.OverridePreferredModel(config.SelectedModelTypeLarge, selected)
+	cfg.OverridePreferredModel(config.SelectedModelTypeSmall, selected)
+	cfg.SetupAgents()
+
+	// Keep buildTools light: no sub-agent or agentic-fetch construction.
+	coderCfg := cfg.Config().Agents[config.AgentCoder]
+	coderCfg.AllowedTools = nil
+	cfg.Config().Agents[config.AgentCoder] = coderCfg
+
+	return agent.NewCoordinator(ctx, agent.CoordinatorOptions{
+		Config:   cfg,
+		Sessions: sessions,
+		Messages: messages,
+	})
+}
+
 // newRealCoordinator builds a production agent.Coordinator over a
 // DB-backed session/message store, wrapped in a gate. It is constructed
-// through the real agent.NewCoordinator path (via the test-only
-// agenttest helper) with an offline-resolvable model: the
-// cancel-on-entry path under test persists a canceled turn and returns
-// before any model call, so no network I/O happens.
+// through the real agent.NewCoordinator path with an offline-resolvable
+// model: the cancel-on-entry path under test persists a canceled turn
+// and returns before any model call, so no network I/O happens.
 func newRealCoordinator(t *testing.T) (*gatedCoordinator, session.Service, message.Service) {
 	t.Helper()
 	conn, err := db.Connect(t.Context(), t.TempDir())
@@ -52,7 +101,7 @@ func newRealCoordinator(t *testing.T) (*gatedCoordinator, session.Service, messa
 	sessions := session.NewService(q, conn)
 	messages := message.NewService(q)
 
-	coord, err := agenttest.NewCoordinator(t.Context(), t.TempDir(), sessions, messages)
+	coord, err := newTestCoordinator(t.Context(), t.TempDir(), sessions, messages)
 	require.NoError(t, err)
 
 	return &gatedCoordinator{

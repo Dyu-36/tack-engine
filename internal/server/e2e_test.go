@@ -63,7 +63,7 @@ func (h *e2eHarness) installServer(t *testing.T) {
 	})
 	srv.installHandler()
 
-	hs := httptest.NewServer(srv.Handler())
+	hs := httptest.NewServer(srv.h.Handler)
 	// Order matters: t.Cleanup is LIFO and the test's own per-
 	// stream cancels (cancelA/cancelB) run first. After those, we
 	// want hs.Close to fire first (so any handler still parked in

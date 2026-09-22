@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/crush/internal/env"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +24,7 @@ import (
 func realShellResolver(vars map[string]string) VariableResolver {
 	m := map[string]string{"PATH": os.Getenv("PATH")}
 	maps.Copy(m, vars)
-	return NewShellVariableResolver(env.NewFromMap(m))
+	return NewShellVariableResolver(testEnv(m))
 }
 
 func writeTempFile(t *testing.T, content string) string {
@@ -441,72 +440,4 @@ func TestLSPConfig_ResolvedEnv_RealShell(t *testing.T) {
 		require.Equal(t, first, second)
 		require.Equal(t, orig, l.Env, "receiver Env must be preserved")
 	})
-}
-
-// TestLSPConfig_IdentityResolver pins the client-mode contract: both
-// ResolvedArgs and ResolvedEnv round-trip the template verbatim under
-// IdentityResolver and never error on unset variables. Local
-// expansion would double-expand when the server does its own — this
-// has to stay a pure pass-through.
-func TestLSPConfig_IdentityResolver(t *testing.T) {
-	t.Parallel()
-
-	l := LSPConfig{
-		Args: []string{"--root", "$LSP_ROOT", "$(vault read -f lsp)"},
-		Env: map[string]string{
-			"GOPATH": "$HOME/go",
-			"TOKEN":  "$(cat /run/secrets/x)",
-		},
-	}
-	r := IdentityResolver()
-
-	args, err := l.ResolvedArgs(r)
-	require.NoError(t, err)
-	require.Equal(t, l.Args, args)
-
-	envs, err := l.ResolvedEnv(r)
-	require.NoError(t, err)
-	require.Equal(t, l.Env, envs)
-}
-
-// TestMCPConfig_IdentityResolver pins the client-mode contract: every
-// Resolved* method round-trips the template verbatim and never errors
-// on unset variables. Local expansion would double-expand when the
-// server does its own — this has to stay a pure pass-through.
-func TestMCPConfig_IdentityResolver(t *testing.T) {
-	t.Parallel()
-
-	m := MCPConfig{
-		Command: "$CMD",
-		Args:    []string{"--token", "$MCP_MISSING_TOKEN", "$(vault read -f secret)"},
-		Env: map[string]string{
-			"TOKEN": "$(cat /run/secrets/x)",
-			"HOST":  "$MCP_MISSING_HOST",
-		},
-		Headers: map[string]string{
-			"Authorization": "Bearer $(vault read -f token)",
-		},
-		URL: "https://$MCP_HOST/$(vault read -f path)",
-	}
-	r := IdentityResolver()
-
-	args, err := m.ResolvedArgs(r)
-	require.NoError(t, err)
-	require.Equal(t, m.Args, args)
-
-	envs, err := m.ResolvedEnv(r)
-	require.NoError(t, err)
-	// Sorted "KEY=value".
-	require.Equal(t, []string{
-		"HOST=$MCP_MISSING_HOST",
-		"TOKEN=$(cat /run/secrets/x)",
-	}, envs)
-
-	headers, err := m.ResolvedHeaders(r)
-	require.NoError(t, err)
-	require.Equal(t, m.Headers, headers)
-
-	u, err := m.ResolvedURL(r)
-	require.NoError(t, err)
-	require.Equal(t, m.URL, u)
 }

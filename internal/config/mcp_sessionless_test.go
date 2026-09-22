@@ -3,14 +3,13 @@ package config
 import (
 	"testing"
 
-	"github.com/charmbracelet/crush/internal/env"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMCPConfig_IsSessionless(t *testing.T) {
 	t.Parallel()
 
-	resolver := NewShellVariableResolver(env.NewFromMap(map[string]string{
+	resolver := NewShellVariableResolver(testEnv(map[string]string{
 		"GH_MCP_HOST": "api.githubcopilot.com",
 	}))
 	boolPtr := func(b bool) *bool { return &b }

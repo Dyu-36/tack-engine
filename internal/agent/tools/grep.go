@@ -52,12 +52,6 @@ func (rc *regexCache) get(pattern string) (*regexp.Regexp, error) {
 	return re, nil
 }
 
-// ResetCache clears compiled regex caches to prevent unbounded growth across sessions.
-func ResetCache() {
-	searchRegexCache.Reset(map[string]*regexp.Regexp{})
-	globRegexCache.Reset(map[string]*regexp.Regexp{})
-}
-
 // Global regex cache instances
 var (
 	searchRegexCache = newRegexCache()

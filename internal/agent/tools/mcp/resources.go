@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"errors"
-	"iter"
 	"log/slog"
 
 	"github.com/charmbracelet/crush/internal/config"
@@ -17,30 +16,6 @@ type Resource = mcp.Resource
 type ResourceContents = mcp.ResourceContents
 
 var allResources = csync.NewMap[string, []*Resource]()
-
-// Resources returns all available MCP resources.
-func Resources() iter.Seq2[string, []*Resource] {
-	return allResources.Seq2()
-}
-
-// ListResources returns the current resources for an MCP server.
-func ListResources(ctx context.Context, cfg *config.ConfigStore, name string) ([]*Resource, error) {
-	session, err := getOrRenewClient(ctx, cfg, name)
-	if err != nil {
-		return nil, err
-	}
-
-	resources, err := getResources(ctx, session)
-	if err != nil {
-		return nil, err
-	}
-
-	resourceCount := updateResources(name, resources)
-	prev, _ := states.Get(name)
-	prev.Counts.Resources = resourceCount
-	updateState(name, StateConnected, nil, session, prev.Counts)
-	return resources, nil
-}
 
 // ReadResource reads the contents of a resource from an MCP server.
 func ReadResource(ctx context.Context, cfg *config.ConfigStore, name, uri string) ([]*ResourceContents, error) {

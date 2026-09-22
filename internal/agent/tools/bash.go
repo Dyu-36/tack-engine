@@ -48,7 +48,6 @@ const (
 	DefaultShellTimeout = 120
 	MaxOutputLength     = 30000
 	ShellNoOutput       = "no output"
-
 )
 
 //go:embed bash.md.tpl

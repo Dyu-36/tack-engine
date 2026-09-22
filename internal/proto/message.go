@@ -652,33 +652,12 @@ func (a Attachment) ToMessage() message.Attachment {
 	}
 }
 
-// AttachmentFromMessage converts a [message.Attachment] to a proto
-// Attachment.
-func AttachmentFromMessage(a message.Attachment) Attachment {
-	return Attachment{
-		FilePath: a.FilePath,
-		FileName: a.FileName,
-		MimeType: a.MimeType,
-		Content:  a.Content,
-	}
-}
-
 // AttachmentsToMessage converts a slice of proto Attachments to a slice
 // of [message.Attachment].
 func AttachmentsToMessage(as []Attachment) []message.Attachment {
 	out := make([]message.Attachment, len(as))
 	for i, a := range as {
 		out[i] = a.ToMessage()
-	}
-	return out
-}
-
-// AttachmentsFromMessage converts a slice of [message.Attachment] to a
-// slice of proto Attachments.
-func AttachmentsFromMessage(as []message.Attachment) []Attachment {
-	out := make([]Attachment, len(as))
-	for i, a := range as {
-		out[i] = AttachmentFromMessage(a)
 	}
 	return out
 }

@@ -25,10 +25,10 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/discover"
-	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/extensions"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/history"
+	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/log"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/oauth"
@@ -738,6 +738,21 @@ func mergeCallOptions(model Model, cfg config.ProviderConfig) (fantasy.ProviderO
 	return modelOptions, temp, topP, topK, freqPenalty, presPenalty, nil
 }
 
+// buildHookRunner compiles the workspace's PreToolUse hook config into a
+// runner, or returns nil when no hooks are configured. Matchers are compiled
+// here so a config reload that rebuilds the agent also rebuilds the compiled
+// matchers; a reload without hooks yields a nil runner and the tool wrapper
+// skips hook execution entirely. Hook commands carry the same trust as a
+// shell alias the user wrote themselves, so no block functions are applied.
+func (c *coordinator) buildHookRunner() *hooks.Runner {
+	configured := c.cfg.Config().Hooks[hooks.EventPreToolUse]
+	if len(configured) == 0 {
+		return nil
+	}
+	workingDir := c.cfg.WorkingDir()
+	return hooks.NewRunner(configured, workingDir, workingDir)
+}
+
 func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, agent config.Agent) (SessionAgent, error) {
 	large, small, err := c.buildAgentModels(ctx)
 	if err != nil {
@@ -756,6 +771,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Tools:                nil,
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,
+		Hooks:                c.buildHookRunner(),
 	})
 
 	// The readiness goroutines below perform one-time setup — building the
@@ -953,18 +969,18 @@ func (c *coordinator) buildAgentModels(ctx context.Context) (Model, Model, error
 	}
 
 	return Model{
-		Model:               largeModel,
-		CatwalkCfg:          *largeCatwalkModel,
-		ModelCfg:            largeModelCfg,
-		FlatRate:            largeProviderCfg.FlatRate,
-		OmitMaxOutputTokens: omitMaxOutputTokens(largeProviderCfg),
-	}, Model{
-		Model:               smallModel,
-		CatwalkCfg:          *smallCatwalkModel,
-		ModelCfg:            smallModelCfg,
-		FlatRate:            smallProviderCfg.FlatRate,
-		OmitMaxOutputTokens: omitMaxOutputTokens(smallProviderCfg),
-	}, nil
+			Model:               largeModel,
+			CatwalkCfg:          *largeCatwalkModel,
+			ModelCfg:            largeModelCfg,
+			FlatRate:            largeProviderCfg.FlatRate,
+			OmitMaxOutputTokens: omitMaxOutputTokens(largeProviderCfg),
+		}, Model{
+			Model:               smallModel,
+			CatwalkCfg:          *smallCatwalkModel,
+			ModelCfg:            smallModelCfg,
+			FlatRate:            smallProviderCfg.FlatRate,
+			OmitMaxOutputTokens: omitMaxOutputTokens(smallProviderCfg),
+		}, nil
 }
 
 func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {
@@ -1226,7 +1242,6 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 		switch providerCfg.ID {
 		case hyper.Name:
 			baseURL = hyper.BaseURL() + "/v1"
-			headers["x-crush-id"] = event.GetID()
 		case string(catwalk.InferenceProviderZAI):
 			if providerCfg.ExtraBody == nil {
 				providerCfg.ExtraBody = map[string]any{}
@@ -1560,129 +1575,6 @@ func (c *coordinator) refreshApiKeyTemplate(ctx context.Context, providerCfg con
 	if err := c.UpdateModels(ctx); err != nil {
 		return err
 	}
-	return nil
-}
-
-// subAgentParams holds the parameters for running a sub-agent.
-type subAgentParams struct {
-	Agent          SessionAgent
-	SessionID      string
-	AgentMessageID string
-	ToolCallID     string
-	Prompt         string
-	SessionTitle   string
-	// SessionSetup is an optional callback invoked after session creation
-	// but before agent execution, for custom session configuration.
-	SessionSetup func(sessionID string)
-}
-
-// runSubAgent runs a sub-agent and handles session management and cost accumulation.
-// It creates a sub-session, runs the agent with the given prompt, and propagates
-// the cost to the parent session.
-func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (fantasy.ToolResponse, error) {
-	// Create sub-session
-	agentToolSessionID := c.sessions.CreateAgentToolSessionID(params.AgentMessageID, params.ToolCallID)
-	session, err := c.sessions.CreateTaskSession(ctx, agentToolSessionID, params.SessionID, params.SessionTitle)
-	if err != nil {
-		return fantasy.ToolResponse{}, fmt.Errorf("create session: %w", err)
-	}
-
-	// Call session setup function if provided
-	if params.SessionSetup != nil {
-		params.SessionSetup(session.ID)
-	}
-
-	// Get model configuration
-	model := params.Agent.Model()
-	maxTokens := model.CatwalkCfg.DefaultMaxTokens
-	if model.ModelCfg.MaxTokens != 0 {
-		maxTokens = model.ModelCfg.MaxTokens
-	}
-
-	providerCfg, ok := c.cfg.Config().Providers.Get(model.ModelCfg.Provider)
-	if !ok {
-		return fantasy.ToolResponse{}, errModelProviderNotConfigured
-	}
-
-	subOptions, err := getProviderOptions(model, providerCfg)
-	if err != nil {
-		// Invalid provider options fail the tool call before any
-		// provider request is attempted.
-		return fantasy.ToolResponse{}, fmt.Errorf("failed to prepare provider options: %w", err)
-	}
-
-	// Run the agent
-	run := func() (*fantasy.AgentResult, error) {
-		return params.Agent.Run(ctx, SessionAgentCall{
-			SessionID:        session.ID,
-			Prompt:           params.Prompt,
-			MaxOutputTokens:  maxTokens,
-			ProviderOptions:  subOptions,
-			Temperature:      model.ModelCfg.Temperature,
-			TopP:             model.ModelCfg.TopP,
-			TopK:             model.ModelCfg.TopK,
-			FrequencyPenalty: model.ModelCfg.FrequencyPenalty,
-			PresencePenalty:  model.ModelCfg.PresencePenalty,
-			NonInteractive:   true,
-			OnAuthRefresh:    c.makeAuthRefreshCallback(providerCfg),
-		})
-	}
-	result, err := run()
-	// Notify only if still unauthorized after retry. AWS SSO is handled
-	// transparently inside OnAuthRefresh, so it needs no post-run notice.
-	if err != nil && isUnauthorized(err) && c.notify != nil && model.ModelCfg.Provider == hyper.Name {
-		c.notify.Publish(pubsub.CreatedEvent, notify.Notification{
-			Type:       notify.TypeReAuthenticate,
-			ProviderID: model.ModelCfg.Provider,
-		})
-	}
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err)), nil
-	}
-
-	// Update parent session cost on a best-effort basis. A failure here must
-	// not discard the sub-agent output that was already produced.
-	if err := c.updateParentSessionCost(ctx, session.ID, params.SessionID); err != nil {
-		slog.Warn(
-			"Failed to update parent session cost",
-			"child_session", session.ID,
-			"parent_session", params.SessionID,
-			"error", err,
-		)
-	}
-
-	output := subAgentOutput(result)
-	if output == "" {
-		return fantasy.NewTextErrorResponse("Sub-agent completed but produced no text output."), nil
-	}
-	return fantasy.NewTextResponse(output), nil
-}
-
-func subAgentOutput(result *fantasy.AgentResult) string {
-	if result == nil {
-		return ""
-	}
-	return result.Response.Content.Text()
-}
-
-// updateParentSessionCost accumulates the cost from a child session to its parent session.
-func (c *coordinator) updateParentSessionCost(ctx context.Context, childSessionID, parentSessionID string) error {
-	childSession, err := c.sessions.Get(ctx, childSessionID)
-	if err != nil {
-		return fmt.Errorf("get child session: %w", err)
-	}
-
-	parentSession, err := c.sessions.Get(ctx, parentSessionID)
-	if err != nil {
-		return fmt.Errorf("get parent session: %w", err)
-	}
-
-	parentSession.Cost += childSession.Cost
-
-	if _, err := c.sessions.Save(ctx, parentSession); err != nil {
-		return fmt.Errorf("save parent session: %w", err)
-	}
-
 	return nil
 }
 

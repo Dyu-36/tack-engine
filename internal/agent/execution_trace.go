@@ -3,12 +3,15 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http/httptrace"
 	"sort"
+	"strings"
 	"time"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/agent/notify"
+	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/runobserve"
 )
 
@@ -283,7 +286,9 @@ func readReasoningFields(fields map[string]any, result *notify.ReasoningTelemetr
 
 type tracedTool struct {
 	fantasy.AgentTool
-	trace *RunTrace
+	trace     *RunTrace
+	hooks     *hooks.Runner
+	sessionID string
 }
 
 func (tool tracedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
@@ -301,7 +306,125 @@ func (tool tracedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 			record.PermissionMicros += duration.Microseconds()
 		}
 	})
+
+	agg, denied := tool.runPreToolUseHooks(ctx, &call)
+	if denied {
+		response := mergeHookMetadata(deniedHookResponse(agg), agg)
+		t.recordToolCall(&record, response, nil)
+		return response, nil
+	}
+
 	response, err := tool.AgentTool.Run(ctx, call)
+	if agg.HookCount > 0 && agg.Context != "" {
+		response.Content = joinHookContext(response.Content, agg.Context)
+	}
+	response = mergeHookMetadata(response, agg)
+	t.recordToolCall(&record, response, err)
+	return response, err
+}
+
+// runPreToolUseHooks runs this workspace's PreToolUse hooks for the call and
+// reports whether the call must be denied. It also applies an updated_input
+// patch to the call in place, so a hook can rewrite a tool's arguments before
+// it runs. The hook wall time is recorded as the "hook" phase so it shows up
+// in per-tool telemetry. Hooks never fail the call: a runner error is logged
+// and treated as "no opinion", matching the exit-code semantics in the hooks
+// package where only exit codes 2 and 49 block.
+func (tool tracedTool) runPreToolUseHooks(ctx context.Context, call *fantasy.ToolCall) (hooks.AggregateResult, bool) {
+	if tool.hooks == nil {
+		return hooks.AggregateResult{}, false
+	}
+
+	stopHook := runobserve.Start(ctx, "hook")
+	agg, err := tool.hooks.Run(ctx, hooks.EventPreToolUse, tool.sessionID, call.Name, call.Input)
+	stopHook()
+	if err != nil {
+		slog.Warn("PreToolUse hooks failed; continuing without a hook decision", "tool", call.Name, "error", err)
+		return hooks.AggregateResult{}, false
+	}
+	if agg.Decision == hooks.DecisionDeny {
+		return agg, true
+	}
+	if agg.UpdatedInput != "" {
+		call.Input = agg.UpdatedInput
+	}
+	return agg, false
+}
+
+// deniedHookResponse builds the tool response for a denied call. The hook's
+// reason is the tool error text; a halting hook (exit code 49) additionally
+// stops the turn so the model is not called again.
+func deniedHookResponse(agg hooks.AggregateResult) fantasy.ToolResponse {
+	reason := strings.TrimSpace(agg.Reason)
+	if reason == "" {
+		reason = "blocked by PreToolUse hook"
+	}
+	return fantasy.ToolResponse{
+		Type:     "text",
+		Content:  reason,
+		IsError:  true,
+		StopTurn: agg.Halt,
+	}
+}
+
+// joinHookContext appends hook-provided context to the tool's own output so
+// the model sees it on the next step.
+func joinHookContext(content, hookContext string) string {
+	if content == "" {
+		return hookContext
+	}
+	return content + "\n\n" + hookContext
+}
+
+// mergeHookMetadata records the hook outcome in the tool response metadata so
+// clients can render a hook indicator. Existing metadata keys (status,
+// exit_code) are preserved.
+func mergeHookMetadata(response fantasy.ToolResponse, agg hooks.AggregateResult) fantasy.ToolResponse {
+	if agg.HookCount == 0 {
+		return response
+	}
+
+	merged := map[string]any{}
+	if response.Metadata != "" {
+		if err := json.Unmarshal([]byte(response.Metadata), &merged); err != nil {
+			slog.Warn("Tool response metadata is not a JSON object; dropping it for hook metadata", "error", err)
+			merged = map[string]any{}
+		}
+	}
+
+	hookMeta := hooks.HookMetadata{
+		HookCount:    agg.HookCount,
+		Decision:     agg.Decision.String(),
+		Halt:         agg.Halt,
+		Reason:       agg.Reason,
+		InputRewrite: agg.UpdatedInput != "",
+		Hooks:        agg.Hooks,
+	}
+	encoded, err := json.Marshal(hookMeta)
+	if err != nil {
+		slog.Warn("Failed to encode hook metadata", "error", err)
+		return response
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		slog.Warn("Failed to decode hook metadata", "error", err)
+		return response
+	}
+	for key, value := range fields {
+		merged[key] = value
+	}
+
+	out, err := json.Marshal(merged)
+	if err != nil {
+		slog.Warn("Failed to merge hook metadata", "error", err)
+		return response
+	}
+	response.Metadata = string(out)
+	return response
+}
+
+// recordToolCall finishes the telemetry record and appends it to the trace.
+func (t *RunTrace) recordToolCall(record *notify.ToolCallTelemetry, response fantasy.ToolResponse, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	record.EndedMicros = time.Since(t.anchor).Microseconds()
@@ -318,17 +441,18 @@ func (tool tracedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		record.ExitCode = metadata.ExitCode
 	}
 	if len(t.toolCalls) < maxExecutionRecords {
-		t.toolCalls = append(t.toolCalls, record)
+		t.toolCalls = append(t.toolCalls, *record)
 	} else {
 		t.executionRecordsDropped++
 	}
-	return response, err
 }
 
-func traceTools(tools []fantasy.AgentTool, trace *RunTrace) []fantasy.AgentTool {
+// traceTools wraps every tool the agent can call with telemetry and the
+// workspace's PreToolUse hook runner.
+func traceTools(tools []fantasy.AgentTool, trace *RunTrace, hookRunner *hooks.Runner, sessionID string) []fantasy.AgentTool {
 	wrapped := make([]fantasy.AgentTool, len(tools))
 	for i, tool := range tools {
-		wrapped[i] = tracedTool{AgentTool: tool, trace: trace}
+		wrapped[i] = tracedTool{AgentTool: tool, trace: trace, hooks: hookRunner, sessionID: sessionID}
 	}
 	return wrapped
 }

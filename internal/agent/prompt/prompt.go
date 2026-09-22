@@ -26,7 +26,6 @@ type Prompt struct {
 	name         string
 	template     string
 	now          func() time.Time
-	platform     string
 	workingDir   string
 	activeSkills []*skills.Skill
 	tools        []ToolInfo
@@ -158,18 +157,6 @@ type PromptBuild struct {
 }
 
 type Option func(*Prompt)
-
-func WithTimeFunc(fn func() time.Time) Option {
-	return func(p *Prompt) {
-		p.now = fn
-	}
-}
-
-func WithPlatform(platform string) Option {
-	return func(p *Prompt) {
-		p.platform = platform
-	}
-}
 
 func WithWorkingDir(workingDir string) Option {
 	return func(p *Prompt) {
@@ -457,7 +444,7 @@ func canonicalRenderPath(path, platform string) string {
 
 func (p *Prompt) promptData(ctx context.Context, provider, model string, store *config.ConfigStore) (PromptDat, error) {
 	workingDir := cmp.Or(p.workingDir, store.WorkingDir())
-	platform := cmp.Or(p.platform, runtime.GOOS)
+	platform := runtime.GOOS
 
 	cfg := store.Config()
 	contextFiles := loadContextFiles(cfg.Options.ContextPaths, store, platform)

@@ -1,3 +1,7 @@
+//go:build gotacktest
+
+// Test-only App harness. Compiled only with the gotacktest build tag so the
+// shipped engine binary never carries it; other packages drive it in-process.
 package app
 
 import (

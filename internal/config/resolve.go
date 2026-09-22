@@ -17,20 +17,6 @@ type VariableResolver interface {
 	ResolveValue(value string) (string, error)
 }
 
-// identityResolver is a no-op resolver that returns values unchanged.
-// Used in client mode where variable resolution is handled server-side.
-type identityResolver struct{}
-
-func (identityResolver) ResolveValue(value string) (string, error) {
-	return value, nil
-}
-
-// IdentityResolver returns a VariableResolver that passes values through
-// unchanged.
-func IdentityResolver() VariableResolver {
-	return identityResolver{}
-}
-
 // Expander is the single-value shell expansion seam used by
 // shellVariableResolver. Production wires it to shell.ExpandValue; tests
 // can inject a fake via WithExpander.
@@ -38,16 +24,6 @@ type Expander func(ctx context.Context, value string, env []string) (string, err
 
 // ShellResolverOption customizes shell variable resolver construction.
 type ShellResolverOption func(*shellVariableResolver)
-
-// WithExpander overrides the expansion function used by the resolver.
-// Primarily intended for tests; production callers should not need this.
-func WithExpander(e Expander) ShellResolverOption {
-	return func(r *shellVariableResolver) {
-		if e != nil {
-			r.expand = e
-		}
-	}
-}
 
 type shellVariableResolver struct {
 	env    env.Env

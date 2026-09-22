@@ -13,12 +13,26 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/crush/internal/config"
-	"github.com/charmbracelet/crush/internal/env"
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
+
+// newTestEnv adapts a plain map to the env.Env interface for resolver
+// tests, keeping the shell environment hermetic (only the variables the
+// test supplies are visible).
+type newTestEnv map[string]string
+
+func (e newTestEnv) Get(key string) string { return e[key] }
+
+func (e newTestEnv) Env() []string {
+	values := make([]string, 0, len(e))
+	for k, v := range e {
+		values = append(values, k+"="+v)
+	}
+	return values
+}
 
 // shellResolverWithPath builds a shell resolver whose env carries PATH
 // plus any caller-supplied overrides. Without PATH, $(cat), $(echo),
@@ -28,7 +42,7 @@ func shellResolverWithPath(t *testing.T, overrides map[string]string) config.Var
 	t.Helper()
 	m := map[string]string{"PATH": os.Getenv("PATH")}
 	maps.Copy(m, overrides)
-	return config.NewShellVariableResolver(env.NewFromMap(m))
+	return config.NewShellVariableResolver(newTestEnv(m))
 }
 
 func TestMCPSession_CancelOnClose(t *testing.T) {
@@ -67,7 +81,7 @@ func TestMCPSession_CancelOnClose(t *testing.T) {
 func TestCreateTransport_URLResolution(t *testing.T) {
 	t.Parallel()
 
-	shell := config.NewShellVariableResolver(env.NewFromMap(map[string]string{
+	shell := config.NewShellVariableResolver(newTestEnv(map[string]string{
 		"MCP_HOST": "mcp.example.com",
 	}))
 
@@ -522,7 +536,7 @@ func TestCreateSession_ResolutionFailureUpdatesState(t *testing.T) {
 			require.Nil(t, sess)
 			require.Contains(t, err.Error(), tc.wantErrContains)
 
-			info, ok := GetState(tc.mcpName)
+			info, ok := GetStates()[tc.mcpName]
 			require.True(t, ok, "state entry must be written for %q", tc.mcpName)
 			require.Equal(t, StateError, info.State, "expected StateError, got %s", info.State)
 			require.Error(t, info.Error, "state must carry the failure error")
@@ -776,7 +790,7 @@ func setDistinct(typ reflect.Type, field reflect.Value) {
 // TestBeginAuth_UnknownServer proves BeginAuth rejects a server that is not
 // present in the configuration.
 func TestBeginAuth_UnknownServer(t *testing.T) {
-	cfg := config.NewTestStore(&config.Config{})
+	cfg := config.NewStore(&config.Config{})
 	_, _, err := BeginAuth(cfg, "missing")
 	require.ErrorContains(t, err, "not found")
 }
@@ -784,7 +798,7 @@ func TestBeginAuth_UnknownServer(t *testing.T) {
 // TestBeginAuth_NonOAuth proves BeginAuth rejects a server that does not use
 // OAuth over HTTP.
 func TestBeginAuth_NonOAuth(t *testing.T) {
-	cfg := config.NewTestStore(&config.Config{
+	cfg := config.NewStore(&config.Config{
 		MCP: config.MCPs{
 			"stdio": {Type: config.MCPStdio},
 			"plain": {Type: config.MCPHttp, URL: "https://example.com/mcp"},
@@ -801,7 +815,7 @@ func TestBeginAuth_NonOAuth(t *testing.T) {
 // the first is outstanding, and succeeds once the first has finished.
 func TestBeginAuth_Concurrent(t *testing.T) {
 	const name = "oauth-http"
-	cfg := config.NewTestStore(&config.Config{
+	cfg := config.NewStore(&config.Config{
 		MCP: config.MCPs{name: {Type: config.MCPHttp, URL: "https://example.com/mcp", OAuth: true}},
 	})
 
@@ -881,7 +895,7 @@ func TestCreateSession_Sessionless(t *testing.T) {
 		return srv, listenTotal
 	}
 
-	resolver := config.NewShellVariableResolver(env.NewFromMap(map[string]string{
+	resolver := config.NewShellVariableResolver(newTestEnv(map[string]string{
 		"PATH": os.Getenv("PATH"),
 	}))
 

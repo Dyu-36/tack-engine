@@ -290,32 +290,6 @@ func durationFromEnv(name string, def time.Duration) time.Duration {
 	return def
 }
 
-// SetCreateGrace overrides the create-grace window. Intended for tests
-// that need short timeouts.
-func (b *Backend) SetCreateGrace(d time.Duration) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.createGrace = d
-}
-
-// SetDetachGrace overrides how long a client's claim survives after its
-// last SSE stream drops. A value <= 0 restores the tear-down-immediately
-// behavior. Intended for tests.
-func (b *Backend) SetDetachGrace(d time.Duration) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.detachGrace = d
-}
-
-// SetIdleShutdownDelay overrides how long the server lingers after its
-// last workspace is released before shutting down. A value <= 0 restores
-// the shut-down-immediately behavior. Intended for tests.
-func (b *Backend) SetIdleShutdownDelay(d time.Duration) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.lingerDelay = d
-}
-
 // GetWorkspace retrieves a workspace by ID.
 func (b *Backend) GetWorkspace(id string) (*Workspace, error) {
 	ws, ok := b.workspaces.Get(id)
@@ -943,19 +917,6 @@ func (b *Backend) SetCurrentSession(workspaceID, clientID, sessionID string) err
 	return nil
 }
 
-// AttachedClients returns the number of clients currently viewing
-// sessionID in the given workspace. Only clients with at least one live
-// SSE stream (streams > 0) AND a matching currentSessionID are counted;
-// pure creation holds do not contribute. Returns [ErrWorkspaceNotFound]
-// if the workspace is unknown.
-func (b *Backend) AttachedClients(workspaceID, sessionID string) (int, error) {
-	ws, ok := b.workspaces.Get(workspaceID)
-	if !ok {
-		return 0, ErrWorkspaceNotFound
-	}
-	return ws.AttachedClientsForSession(sessionID), nil
-}
-
 // AttachedClientsForSession returns the number of clients in this
 // workspace whose currentSessionID equals sessionID and which have at
 // least one live SSE stream. Hold-only clients (streams == 0) do not
@@ -996,17 +957,6 @@ func (b *Backend) VersionInfo() proto.VersionInfo {
 // Config returns the server-level configuration.
 func (b *Backend) Config() *config.ConfigStore {
 	return b.cfg
-}
-
-// Shutdown initiates a graceful server shutdown.
-func (b *Backend) Shutdown() {
-	b.mu.Lock()
-	b.closing = true
-	fn := b.shutdownFn
-	b.mu.Unlock()
-	if fn != nil {
-		fn()
-	}
 }
 
 // ShutdownIfIdle shuts the server down only when it is hosting no

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/crush/internal/env"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,7 +43,7 @@ func TestShellVariableResolver_DelegatesToExpander(t *testing.T) {
 		},
 	}
 
-	e := env.NewFromMap(map[string]string{"FOO": "bar"})
+	e := testEnv(map[string]string{"FOO": "bar"})
 	r := NewShellVariableResolver(e, WithExpander(fe.Expand))
 
 	got, err := r.ResolveValue("hello $FOO")
@@ -63,7 +62,7 @@ func TestShellVariableResolver_LoneDollarIsError(t *testing.T) {
 	// resolver has historically rejected it and callers depend on
 	// that early-fail behaviour.
 	fe := &fakeExpander{}
-	r := NewShellVariableResolver(env.NewFromMap(nil), WithExpander(fe.Expand))
+	r := NewShellVariableResolver(testEnv(nil), WithExpander(fe.Expand))
 
 	_, err := r.ResolveValue("$")
 	require.Error(t, err)
@@ -78,7 +77,7 @@ func TestShellVariableResolver_PassesThroughLiterals(t *testing.T) {
 			return value, nil
 		},
 	}
-	r := NewShellVariableResolver(env.NewFromMap(nil), WithExpander(fe.Expand))
+	r := NewShellVariableResolver(testEnv(nil), WithExpander(fe.Expand))
 
 	got, err := r.ResolveValue("plain-string")
 	require.NoError(t, err)
@@ -94,7 +93,7 @@ func TestShellVariableResolver_WrapsErrorsWithTemplate(t *testing.T) {
 			return "", inner
 		},
 	}
-	r := NewShellVariableResolver(env.NewFromMap(nil), WithExpander(fe.Expand))
+	r := NewShellVariableResolver(testEnv(nil), WithExpander(fe.Expand))
 
 	_, err := r.ResolveValue("$(cat /run/secrets/x)")
 	require.Error(t, err)
@@ -191,7 +190,7 @@ func TestSanitizeResolveError(t *testing.T) {
 				return "", errors.New(nasty)
 			},
 		}
-		r := NewShellVariableResolver(env.NewFromMap(nil), WithExpander(fe.Expand))
+		r := NewShellVariableResolver(testEnv(nil), WithExpander(fe.Expand))
 
 		_, err := r.ResolveValue("$T")
 		require.Error(t, err)
@@ -221,7 +220,7 @@ func TestScrubErrorMessage(t *testing.T) {
 }
 
 func TestNewShellVariableResolver(t *testing.T) {
-	testEnv := env.NewFromMap(map[string]string{"TEST": "value"})
+	testEnv := testEnv(map[string]string{"TEST": "value"})
 	resolver := NewShellVariableResolver(testEnv)
 
 	require.NotNil(t, resolver)

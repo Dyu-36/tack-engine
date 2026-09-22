@@ -114,15 +114,6 @@ type service struct {
 // ServiceOption configures a [Service] at construction.
 type ServiceOption func(*service)
 
-// WithDebounce overrides the debounce window for [Service.Update]. A
-// zero or negative value disables debouncing entirely (every update
-// flushes synchronously). Intended primarily for tests.
-func WithDebounce(d time.Duration) ServiceOption {
-	return func(s *service) {
-		s.debounce = d
-	}
-}
-
 func NewService(q db.Querier, opts ...ServiceOption) Service {
 	s := &service{
 		Broker:   pubsub.NewBroker[Message](),

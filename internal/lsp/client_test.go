@@ -8,7 +8,6 @@ import (
 
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
-	"github.com/charmbracelet/crush/internal/env"
 	"github.com/charmbracelet/x/powernap/pkg/lsp/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +23,7 @@ func TestClient(t *testing.T) {
 
 	// Test creating a powernap client - this will likely fail with echo
 	// but we can still test the basic structure
-	client, err := New("test", cfg, config.NewShellVariableResolver(env.NewFromMap(map[string]string{
+	client, err := New("test", cfg, config.NewShellVariableResolver(testEnv(map[string]string{
 		"THE_CMD": "echo",
 	})), ".", false)
 	if err != nil {
@@ -71,7 +70,7 @@ func TestNew_ExpansionFailure_Args(t *testing.T) {
 		Command: "echo",
 		Args:    []string{"--root", "$(false)"},
 	}
-	resolver := config.NewShellVariableResolver(env.NewFromMap(map[string]string{}))
+	resolver := config.NewShellVariableResolver(testEnv(map[string]string{}))
 
 	client, err := New("test-args-fail", cfg, resolver, ".", false)
 	require.Error(t, err)
@@ -87,7 +86,7 @@ func TestNew_ExpansionFailure_Env(t *testing.T) {
 		Command: "echo",
 		Env:     map[string]string{"BAD": "$(false)"},
 	}
-	resolver := config.NewShellVariableResolver(env.NewFromMap(map[string]string{}))
+	resolver := config.NewShellVariableResolver(testEnv(map[string]string{}))
 
 	client, err := New("test-env-fail", cfg, resolver, ".", false)
 	require.Error(t, err)

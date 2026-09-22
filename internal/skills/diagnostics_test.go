@@ -64,12 +64,12 @@ func TestDiscoverWithStates_MissingPath(t *testing.T) {
 }
 
 func TestGetLatestStates(t *testing.T) {
-	// Not parallel - manipulates package-level cache.
-	prev := GetLatestStates()
-	t.Cleanup(func() { SetLatestStates(prev) })
+	t.Parallel()
+	mgr := NewManager(nil, nil, nil)
+	t.Cleanup(mgr.Shutdown)
 
-	SetLatestStates(nil)
-	require.Nil(t, GetLatestStates())
+	mgr.SetLatestStates(nil)
+	require.Nil(t, mgr.States())
 
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "my-skill")
@@ -81,24 +81,24 @@ func TestGetLatestStates(t *testing.T) {
 	))
 
 	_, states := DiscoverWithStates([]string{dir})
-	SetLatestStates(states)
+	mgr.SetLatestStates(states)
 
-	got := GetLatestStates()
+	got := mgr.States()
 	require.Len(t, got, 1)
 	require.Equal(t, "my-skill", got[0].Name)
 }
 
 func TestGetLatestStates_Isolation(t *testing.T) {
-	// Not parallel - manipulates package-level cache.
-	prev := GetLatestStates()
-	t.Cleanup(func() { SetLatestStates(prev) })
+	t.Parallel()
+	mgr := NewManager(nil, nil, nil)
+	t.Cleanup(mgr.Shutdown)
 
 	initial := []*SkillState{{Name: "test"}}
-	SetLatestStates(initial)
+	mgr.SetLatestStates(initial)
 
-	got := GetLatestStates()
+	got := mgr.States()
 	got[0].Name = "corrupted"
 
-	check := GetLatestStates()
+	check := mgr.States()
 	require.Equal(t, "test", check[0].Name, "Cache should be isolated from caller mutations")
 }

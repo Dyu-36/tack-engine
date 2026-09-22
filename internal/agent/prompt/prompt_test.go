@@ -125,7 +125,7 @@ func TestSnapshotSplitsStableAndDynamic(t *testing.T) {
 	p, err := NewPrompt(
 		"coder",
 		"STABLE-SECTION\n{{/* dynamic-suffix */}}\nDYNAMIC-SECTION",
-		WithTimeFunc(timeNowStub),
+		withTimeFunc(timeNowStub),
 	)
 	require.NoError(t, err)
 
@@ -147,11 +147,19 @@ func timeNowStub() time.Time {
 	return time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
 }
 
+// withTimeFunc injects a fixed clock so prompt rendering is deterministic in
+// tests. Production leaves the clock unset and uses time.Now.
+func withTimeFunc(fn func() time.Time) Option {
+	return func(p *Prompt) {
+		p.now = fn
+	}
+}
+
 func TestPromptSkillsRenderSortedAndDeterministic(t *testing.T) {
 	p, err := NewPrompt(
 		"coder",
 		"{{if .AvailSkillXML}}{{.AvailSkillXML}}{{end}}{{/* dynamic-suffix */}}",
-		WithTimeFunc(timeNowStub),
+		withTimeFunc(timeNowStub),
 	)
 	require.NoError(t, err)
 
@@ -174,7 +182,7 @@ func buildSkillPrompt(t *testing.T, p *Prompt, store *config.ConfigStore, names 
 	built, err := NewPrompt(
 		p.Name(),
 		"{{if .AvailSkillXML}}{{.AvailSkillXML}}{{end}}{{/* dynamic-suffix */}}",
-		WithTimeFunc(timeNowStub),
+		withTimeFunc(timeNowStub),
 		WithSkills(skillList),
 	)
 	require.NoError(t, err)

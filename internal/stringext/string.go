@@ -2,7 +2,6 @@ package stringext
 
 import (
 	"encoding/base64"
-	"strings"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -10,18 +9,6 @@ import (
 
 func Capitalize(text string) string {
 	return cases.Title(language.English, cases.Compact).String(text)
-}
-
-// NormalizeSpace normalizes whitespace in the given content string.
-// It replaces Windows-style line endings with Unix-style line endings,
-// converts tabs to four spaces, and trims leading and trailing newlines.
-// Per-line indentation is preserved: trimming spaces would eat the first
-// line's leading whitespace and corrupt indentation in code previews.
-func NormalizeSpace(content string) string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	content = strings.ReplaceAll(content, "\t", "    ")
-	content = strings.Trim(content, "\n")
-	return content
 }
 
 // IsValidBase64 reports whether s is canonical base64 under standard

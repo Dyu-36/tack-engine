@@ -1114,6 +1114,58 @@ func (c *controllerV1) handlePostWorkspacePermissionsGrant(w http.ResponseWriter
 	jsonEncode(w, proto.PermissionGrantResponse{Resolved: resolved})
 }
 
+// handlePostWorkspaceQuestionsAnswer submits answers for the workspace's
+// pending question batch.
+//
+//	@Summary		Answer question batch
+//	@Tags			questions
+//	@Accept			json
+//	@Param			id		path	string				true	"Workspace ID"
+//	@Param			request	body	proto.QuestionAnswer	true	"Question answers"
+//	@Success		200	{object}	proto.QuestionAnswerResponse
+//	@Failure		400	{object}	proto.Error
+//	@Failure		404	{object}	proto.Error
+//	@Failure		500	{object}	proto.Error
+//	@Router			/workspaces/{id}/questions/answer [post]
+func (c *controllerV1) handlePostWorkspaceQuestionsAnswer(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req proto.QuestionAnswer
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.server.logError(r, "Failed to decode request", "error", err)
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+
+	resolved, err := c.backend.AnswerQuestion(id, req)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, proto.QuestionAnswerResponse{Resolved: resolved})
+}
+
+// handlePostWorkspaceQuestionsCancel cancels the workspace's pending question
+// batch.
+//
+//	@Summary		Cancel pending question
+//	@Tags			questions
+//	@Param			id	path	string	true	"Workspace ID"
+//	@Success		200	{object}	proto.QuestionAnswerResponse
+//	@Failure		404	{object}	proto.Error
+//	@Failure		500	{object}	proto.Error
+//	@Router			/workspaces/{id}/questions/cancel [post]
+func (c *controllerV1) handlePostWorkspaceQuestionsCancel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	resolved, err := c.backend.CancelQuestion(id)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, proto.QuestionAnswerResponse{Resolved: resolved})
+}
+
 // handlePostWorkspacePermissionsSkip sets whether to skip permission prompts.
 //
 //	@Summary		Set skip permissions

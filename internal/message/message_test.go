@@ -35,6 +35,15 @@ func (s *slowUpdateQuerier) UpdateMessage(ctx context.Context, arg db.UpdateMess
 // newTestService spins up a fresh in-memory message.Service backed by a
 // temporary on-disk SQLite database. Returns the service plus a session
 // ID to attach messages to.
+// withDebounce overrides the debounce window for [Service.Update] in tests.
+// A zero or negative value disables debouncing entirely (every update flushes
+// synchronously).
+func withDebounce(d time.Duration) ServiceOption {
+	return func(s *service) {
+		s.debounce = d
+	}
+}
+
 func newTestService(t *testing.T, opts ...ServiceOption) (Service, string) {
 	t.Helper()
 	conn, err := db.Connect(t.Context(), t.TempDir())
@@ -95,7 +104,7 @@ func TestUpdate_DebouncesTextDeltas(t *testing.T) {
 	t.Parallel()
 
 	// Long-enough debounce that we can verify nothing flushes prematurely.
-	svc, sessionID := newTestService(t, WithDebounce(50*time.Millisecond))
+	svc, sessionID := newTestService(t, withDebounce(50*time.Millisecond))
 
 	subCtx, cancelSub := context.WithCancel(t.Context())
 	defer cancelSub()
@@ -138,7 +147,7 @@ func TestUpdate_DebouncesTextDeltas(t *testing.T) {
 func TestUpdate_TerminalUpdatesFlushSynchronously(t *testing.T) {
 	t.Parallel()
 
-	svc, sessionID := newTestService(t, WithDebounce(time.Hour))
+	svc, sessionID := newTestService(t, withDebounce(time.Hour))
 
 	subCtx, cancelSub := context.WithCancel(t.Context())
 	defer cancelSub()
@@ -172,7 +181,7 @@ func TestUpdate_TerminalUpdatesFlushSynchronously(t *testing.T) {
 func TestUpdate_ToolCallStructuralChangeFlushes(t *testing.T) {
 	t.Parallel()
 
-	svc, sessionID := newTestService(t, WithDebounce(time.Hour))
+	svc, sessionID := newTestService(t, withDebounce(time.Hour))
 
 	msg, err := svc.Create(t.Context(), sessionID, CreateMessageParams{Role: Assistant})
 	require.NoError(t, err)
@@ -198,7 +207,7 @@ func TestUpdate_ToolCallStructuralChangeFlushes(t *testing.T) {
 func TestUpdate_ReasoningEndFlushes(t *testing.T) {
 	t.Parallel()
 
-	svc, sessionID := newTestService(t, WithDebounce(time.Hour))
+	svc, sessionID := newTestService(t, withDebounce(time.Hour))
 
 	msg, err := svc.Create(t.Context(), sessionID, CreateMessageParams{Role: Assistant})
 	require.NoError(t, err)
@@ -223,7 +232,7 @@ func TestUpdate_ReasoningEndFlushes(t *testing.T) {
 func TestFlush_DrainsPendingDebouncedUpdates(t *testing.T) {
 	t.Parallel()
 
-	svc, sessionID := newTestService(t, WithDebounce(time.Hour))
+	svc, sessionID := newTestService(t, withDebounce(time.Hour))
 
 	msg, err := svc.Create(t.Context(), sessionID, CreateMessageParams{Role: Assistant})
 	require.NoError(t, err)
@@ -248,7 +257,7 @@ func TestFlush_DrainsPendingDebouncedUpdates(t *testing.T) {
 func TestFlushAll_DrainsAllPending(t *testing.T) {
 	t.Parallel()
 
-	svc, sessionID := newTestService(t, WithDebounce(time.Hour))
+	svc, sessionID := newTestService(t, withDebounce(time.Hour))
 
 	const n = 5
 	msgs := make([]Message, n)
@@ -297,13 +306,13 @@ func TestUpdate_OrderingMatchesNonCoalesced(t *testing.T) {
 		return msg
 	}
 
-	coalesced, sid1 := newTestService(t, WithDebounce(20*time.Millisecond))
+	coalesced, sid1 := newTestService(t, withDebounce(20*time.Millisecond))
 	a := build(coalesced, sid1)
 	require.NoError(t, coalesced.FlushAll(t.Context()))
 	gotA, err := coalesced.Get(t.Context(), a.ID)
 	require.NoError(t, err)
 
-	immediate, sid2 := newTestService(t, WithDebounce(0))
+	immediate, sid2 := newTestService(t, withDebounce(0))
 	b := build(immediate, sid2)
 	gotB, err := immediate.Get(t.Context(), b.ID)
 	require.NoError(t, err)
@@ -317,7 +326,7 @@ func TestUpdate_OrderingMatchesNonCoalesced(t *testing.T) {
 func TestDelete_DropsPendingState(t *testing.T) {
 	t.Parallel()
 
-	svc, sessionID := newTestService(t, WithDebounce(time.Hour))
+	svc, sessionID := newTestService(t, withDebounce(time.Hour))
 	msg, err := svc.Create(t.Context(), sessionID, CreateMessageParams{Role: Assistant})
 	require.NoError(t, err)
 	msg.AppendContent("dropped")
@@ -424,7 +433,7 @@ func TestBroker_PublishMustDeliverWithReader(t *testing.T) {
 func TestUpdate_TerminalEventUsesMustDeliver(t *testing.T) {
 	t.Parallel()
 
-	svc, sessionID := newTestService(t, WithDebounce(time.Hour))
+	svc, sessionID := newTestService(t, withDebounce(time.Hour))
 
 	subCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -463,7 +472,7 @@ func TestUpdate_TerminalEventUsesMustDeliver(t *testing.T) {
 func TestUpdate_ZeroDebounceFlushesEveryUpdate(t *testing.T) {
 	t.Parallel()
 
-	svc, sessionID := newTestService(t, WithDebounce(0))
+	svc, sessionID := newTestService(t, withDebounce(0))
 
 	msg, err := svc.Create(t.Context(), sessionID, CreateMessageParams{Role: Assistant})
 	require.NoError(t, err)
@@ -500,7 +509,7 @@ func TestFlush_WaitsForInFlightWrite(t *testing.T) {
 		started: make(chan struct{}),
 	}
 	// Short debounce so the timer fires quickly.
-	svc := NewService(slow, WithDebounce(10*time.Millisecond))
+	svc := NewService(slow, withDebounce(10*time.Millisecond))
 
 	msg, err := svc.Create(t.Context(), sess.ID, CreateMessageParams{Role: Assistant})
 	require.NoError(t, err)
@@ -563,7 +572,7 @@ func TestFlushAll_WaitsForInFlightWrite(t *testing.T) {
 		release: make(chan struct{}),
 		started: make(chan struct{}),
 	}
-	svc := NewService(slow, WithDebounce(10*time.Millisecond))
+	svc := NewService(slow, withDebounce(10*time.Millisecond))
 
 	msg, err := svc.Create(t.Context(), sess.ID, CreateMessageParams{Role: Assistant})
 	require.NoError(t, err)
@@ -654,7 +663,7 @@ func TestUpdate_StructuralFlushUsesMustDeliver(t *testing.T) {
 			// Replace the default broker with a tiny buffer + short
 			// must-deliver timeout so we can fully saturate from a
 			// single sender and observe drops without long waits.
-			svc := NewService(q, WithDebounce(time.Hour))
+			svc := NewService(q, withDebounce(time.Hour))
 			impl := svc.(*service)
 			impl.Shutdown()
 			impl.Broker = pubsub.NewBrokerWithOptions[Message](1)

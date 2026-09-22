@@ -22,7 +22,7 @@ func TestLookupClosest(t *testing.T) {
 		err := os.WriteFile(targetFile, []byte("test"), 0o644)
 		require.NoError(t, err)
 
-		foundPath, found := LookupClosest(testDir, "target.txt")
+		foundPath, found := LookupClosestBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator), "target.txt")
 		require.True(t, found)
 		require.Equal(t, targetFile, foundPath)
 	})
@@ -40,7 +40,7 @@ func TestLookupClosest(t *testing.T) {
 		err = os.WriteFile(targetFile, []byte("test"), 0o644)
 		require.NoError(t, err)
 
-		foundPath, found := LookupClosest(subDir, "target.txt")
+		foundPath, found := LookupClosestBounded(subDir, filepath.VolumeName(subDir)+string(filepath.Separator), "target.txt")
 		require.True(t, found)
 		require.Equal(t, targetFile, foundPath)
 	})
@@ -62,7 +62,7 @@ func TestLookupClosest(t *testing.T) {
 		err = os.WriteFile(targetFile, []byte("test"), 0o644)
 		require.NoError(t, err)
 
-		foundPath, found := LookupClosest(subSubDir, "target.txt")
+		foundPath, found := LookupClosestBounded(subSubDir, filepath.VolumeName(subSubDir)+string(filepath.Separator), "target.txt")
 		require.True(t, found)
 		require.Equal(t, targetFile, foundPath)
 	})
@@ -70,7 +70,7 @@ func TestLookupClosest(t *testing.T) {
 	t.Run("target not found", func(t *testing.T) {
 		testDir := t.TempDir()
 
-		foundPath, found := LookupClosest(testDir, "nonexistent.txt")
+		foundPath, found := LookupClosestBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator), "nonexistent.txt")
 		require.False(t, found)
 		require.Empty(t, foundPath)
 	})
@@ -83,7 +83,7 @@ func TestLookupClosest(t *testing.T) {
 		err := os.Mkdir(targetDir, 0o755)
 		require.NoError(t, err)
 
-		foundPath, found := LookupClosest(testDir, "targetdir")
+		foundPath, found := LookupClosestBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator), "targetdir")
 		require.True(t, found)
 		require.Equal(t, targetDir, foundPath)
 	})
@@ -94,13 +94,13 @@ func TestLookupClosest(t *testing.T) {
 		homeDir := home.Dir()
 
 		// Search for a file that doesn't exist from home directory
-		foundPath, found := LookupClosest(homeDir, "nonexistent_file_12345.txt")
+		foundPath, found := LookupClosestBounded(homeDir, filepath.VolumeName(homeDir)+string(filepath.Separator), "nonexistent_file_12345.txt")
 		require.False(t, found)
 		require.Empty(t, foundPath)
 	})
 
 	t.Run("invalid starting directory", func(t *testing.T) {
-		foundPath, found := LookupClosest("/invalid/path/that/does/not/exist", "target.txt")
+		foundPath, found := LookupClosestBounded("/invalid/path/that/does/not/exist", filepath.VolumeName("/invalid/path/that/does/not/exist")+string(filepath.Separator), "target.txt")
 		require.False(t, found)
 		require.Empty(t, foundPath)
 	})
@@ -110,7 +110,7 @@ func TestLookupClosest(t *testing.T) {
 		require.NoError(t, os.WriteFile("target.txt", []byte("test"), 0o644))
 
 		// Search using relative path
-		foundPath, found := LookupClosest(".", "target.txt")
+		foundPath, found := LookupClosestBounded(".", filepath.VolumeName(".")+string(filepath.Separator), "target.txt")
 		require.True(t, found)
 
 		// Resolve symlinks to handle macOS /private/var vs /var discrepancy
@@ -144,7 +144,7 @@ func TestLookupClosestWithOwnership(t *testing.T) {
 		require.NoError(t, err)
 
 		// Search should find the target assuming same ownership
-		foundPath, found := LookupClosest(subDir, "target.txt")
+		foundPath, found := LookupClosestBounded(subDir, filepath.VolumeName(subDir)+string(filepath.Separator), "target.txt")
 		require.True(t, found)
 		require.Equal(t, targetFile, foundPath)
 	})
@@ -157,7 +157,7 @@ func TestLookup(t *testing.T) {
 	t.Run("no targets returns empty slice", func(t *testing.T) {
 		testDir := t.TempDir()
 
-		found, err := Lookup(testDir)
+		found, err := LookupBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator))
 		require.NoError(t, err)
 		require.Empty(t, found)
 	})
@@ -170,7 +170,7 @@ func TestLookup(t *testing.T) {
 		err := os.WriteFile(targetFile, []byte("test"), 0o644)
 		require.NoError(t, err)
 
-		found, err := Lookup(testDir, "target.txt")
+		found, err := LookupBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator), "target.txt")
 		require.NoError(t, err)
 		require.Len(t, found, 1)
 		require.Equal(t, targetFile, found[0])
@@ -191,7 +191,7 @@ func TestLookup(t *testing.T) {
 		err = os.WriteFile(targetFile3, []byte("test3"), 0o644)
 		require.NoError(t, err)
 
-		found, err := Lookup(testDir, "target1.txt", "target2.txt", "target3.txt")
+		found, err := LookupBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator), "target1.txt", "target2.txt", "target3.txt")
 		require.NoError(t, err)
 		require.Len(t, found, 3)
 		require.Contains(t, found, targetFile1)
@@ -215,7 +215,7 @@ func TestLookup(t *testing.T) {
 		err = os.WriteFile(targetFile2, []byte("test2"), 0o644)
 		require.NoError(t, err)
 
-		found, err := Lookup(subDir, "target1.txt", "target2.txt")
+		found, err := LookupBounded(subDir, filepath.VolumeName(subDir)+string(filepath.Separator), "target1.txt", "target2.txt")
 		require.NoError(t, err)
 		require.Len(t, found, 2)
 		require.Contains(t, found, targetFile1)
@@ -246,7 +246,7 @@ func TestLookup(t *testing.T) {
 		err = os.WriteFile(targetFile3, []byte("test3"), 0o644)
 		require.NoError(t, err)
 
-		found, err := Lookup(subSubDir, "target1.txt", "target2.txt", "target3.txt")
+		found, err := LookupBounded(subSubDir, filepath.VolumeName(subSubDir)+string(filepath.Separator), "target1.txt", "target2.txt", "target3.txt")
 		require.NoError(t, err)
 		require.Len(t, found, 3)
 		require.Contains(t, found, targetFile1)
@@ -267,7 +267,7 @@ func TestLookup(t *testing.T) {
 		require.NoError(t, err)
 
 		// Search for existing and non-existing targets
-		found, err := Lookup(testDir, "target1.txt", "nonexistent.txt", "target2.txt", "another_nonexistent.txt")
+		found, err := LookupBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator), "target1.txt", "nonexistent.txt", "target2.txt", "another_nonexistent.txt")
 		require.NoError(t, err)
 		require.Len(t, found, 2)
 		require.Contains(t, found, targetFile1)
@@ -277,7 +277,7 @@ func TestLookup(t *testing.T) {
 	t.Run("no targets found", func(t *testing.T) {
 		testDir := t.TempDir()
 
-		found, err := Lookup(testDir, "nonexistent1.txt", "nonexistent2.txt", "nonexistent3.txt")
+		found, err := LookupBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator), "nonexistent1.txt", "nonexistent2.txt", "nonexistent3.txt")
 		require.NoError(t, err)
 		require.Empty(t, found)
 	})
@@ -293,7 +293,7 @@ func TestLookup(t *testing.T) {
 		err = os.Mkdir(targetDir2, 0o755)
 		require.NoError(t, err)
 
-		found, err := Lookup(testDir, "targetdir1", "targetdir2")
+		found, err := LookupBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator), "targetdir1", "targetdir2")
 		require.NoError(t, err)
 		require.Len(t, found, 2)
 		require.Contains(t, found, targetDir1)
@@ -311,7 +311,7 @@ func TestLookup(t *testing.T) {
 		err = os.Mkdir(targetDir, 0o755)
 		require.NoError(t, err)
 
-		found, err := Lookup(testDir, "target.txt", "targetdir")
+		found, err := LookupBounded(testDir, filepath.VolumeName(testDir)+string(filepath.Separator), "target.txt", "targetdir")
 		require.NoError(t, err)
 		require.Len(t, found, 2)
 		require.Contains(t, found, targetFile)
@@ -319,7 +319,7 @@ func TestLookup(t *testing.T) {
 	})
 
 	t.Run("invalid starting directory", func(t *testing.T) {
-		found, err := Lookup("/invalid/path/that/does/not/exist", "target.txt")
+		found, err := LookupBounded("/invalid/path/that/does/not/exist", filepath.VolumeName("/invalid/path/that/does/not/exist")+string(filepath.Separator), "target.txt")
 		require.Error(t, err)
 		require.Empty(t, found)
 	})
@@ -330,7 +330,7 @@ func TestLookup(t *testing.T) {
 		require.NoError(t, os.WriteFile("target2.txt", []byte("test2"), 0o644))
 
 		// Search using relative path
-		found, err := Lookup(".", "target1.txt", "target2.txt")
+		found, err := LookupBounded(".", filepath.VolumeName(".")+string(filepath.Separator), "target1.txt", "target2.txt")
 		require.NoError(t, err)
 		require.Len(t, found, 2)
 

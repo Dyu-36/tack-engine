@@ -14,7 +14,7 @@ import (
 // generation diff can be exercised without the full coder template.
 func generationPrompt(t *testing.T, template string, opts ...Option) *Prompt {
 	t.Helper()
-	opts = append([]Option{WithTimeFunc(timeNowStub)}, opts...)
+	opts = append([]Option{withTimeFunc(timeNowStub)}, opts...)
 	p, err := NewPrompt("generation-test", template, opts...)
 	require.NoError(t, err)
 	return p

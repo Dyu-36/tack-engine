@@ -995,15 +995,6 @@ func nextRecentModels(cfg *Config, modelType SelectedModelType, model SelectedMo
 	return updated, true
 }
 
-// NewTestStore creates a ConfigStore for testing purposes.
-func NewTestStore(cfg *Config, loadedPaths ...string) *ConfigStore {
-	return &ConfigStore{
-		config:      cfg,
-		loadedPaths: loadedPaths,
-		resolver:    NewShellVariableResolver(env.New()),
-	}
-}
-
 // ImportCopilot attempts to import a GitHub Copilot token from disk.
 func (s *ConfigStore) ImportCopilot() (*oauth.Token, bool) {
 	if s.HasConfigField(ScopeGlobal, "providers.copilot.api_key") || s.HasConfigField(ScopeGlobal, "providers.copilot.oauth") {

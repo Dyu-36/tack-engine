@@ -232,3 +232,37 @@ func CharmtonePantera() Styles {
 **Adding a new theme**: Add a function in `themes.go` that returns the
 result of `quickStyle` with a `quickStyleOpts` palette (plus any needed
 overrides), then wire it into `ThemeForProvider`.
+
+## Gotack fork: Windows-only server runtime
+
+This fork ships only the `server` entrypoint and is built only for Windows.
+It is consumed by Gotack as a separate process over IPC, so nothing here may
+add a Go-level dependency on the desktop host.
+
+### Test-only build tag
+
+In-process test harnesses that other packages need (`app.NewForTest`,
+`backend.InsertWorkspaceForTest`, `config.NewStore`, the backend lifecycle
+overrides) live in files guarded by `//go:build gotacktest`. They are compiled
+only when that tag is set, so the shipped binary and its import graph stay free
+of test-only code. Run tests with the tag:
+
+```powershell
+go test -tags gotacktest ./...
+```
+
+Any command that type-checks test files (`go vet`, `staticcheck`) needs the
+same tag. The deadcode gate deliberately runs without it:
+
+```powershell
+deadcode .      # shipped entrypoint graph; must stay empty
+deadcode ./...  # module-wide, including test-support packages
+```
+
+### CI
+
+`.github/workflows/ci.yml` is the only build workflow (Windows, race tests,
+staticcheck, deadcode); `.github/workflows/security.yml` runs CodeQL, Grype and
+govulncheck. The inherited upstream Charm workflows were removed because they
+depend on `charmbracelet/meta` reusable workflows, a self-hosted runner group
+and release secrets that this fork does not have.

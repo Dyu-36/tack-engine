@@ -17,11 +17,9 @@ import (
 	"io"
 	"os"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 
-	"github.com/charmbracelet/x/exp/slice"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -138,121 +136,6 @@ func (s *Shell) Exec(ctx context.Context, command string) (string, string, error
 	return s.exec(ctx, command)
 }
 
-// ExecStream executes a command in the shell with streaming output to provided writers
-func (s *Shell) ExecStream(ctx context.Context, command string, stdout, stderr io.Writer) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.execStream(ctx, command, stdout, stderr)
-}
-
-// GetWorkingDir returns the current working directory
-func (s *Shell) GetWorkingDir() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cwd
-}
-
-// SetWorkingDir sets the working directory
-func (s *Shell) SetWorkingDir(dir string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Verify the directory exists
-	if _, err := os.Stat(dir); err != nil {
-		return fmt.Errorf("directory does not exist: %w", err)
-	}
-
-	s.cwd = dir
-	return nil
-}
-
-// GetEnv returns a copy of the environment variables
-func (s *Shell) GetEnv() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	env := make([]string, len(s.env))
-	copy(env, s.env)
-	return env
-}
-
-// SetEnv sets an environment variable
-func (s *Shell) SetEnv(key, value string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Update or add the environment variable
-	keyPrefix := key + "="
-	for i, env := range s.env {
-		if strings.HasPrefix(env, keyPrefix) {
-			s.env[i] = keyPrefix + value
-			return
-		}
-	}
-	s.env = append(s.env, keyPrefix+value)
-}
-
-// SetBlockFuncs sets the command block functions for the shell
-func (s *Shell) SetBlockFuncs(blockFuncs []BlockFunc) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.blockFuncs = blockFuncs
-}
-
-// CommandsBlocker creates a BlockFunc that blocks exact command matches
-func CommandsBlocker(cmds []string) BlockFunc {
-	bannedSet := make(map[string]struct{})
-	for _, cmd := range cmds {
-		bannedSet[cmd] = struct{}{}
-	}
-
-	return func(args []string) bool {
-		if len(args) == 0 {
-			return false
-		}
-		_, ok := bannedSet[args[0]]
-		return ok
-	}
-}
-
-// ArgumentsBlocker creates a BlockFunc that blocks specific subcommand
-func ArgumentsBlocker(cmd string, args []string, flags []string) BlockFunc {
-	return func(parts []string) bool {
-		if len(parts) == 0 || parts[0] != cmd {
-			return false
-		}
-
-		argParts, flagParts := splitArgsFlags(parts[1:])
-		if len(argParts) < len(args) || len(flagParts) < len(flags) {
-			return false
-		}
-
-		argsMatch := slices.Equal(argParts[:len(args)], args)
-		flagsMatch := slice.IsSubset(flags, flagParts)
-
-		return argsMatch && flagsMatch
-	}
-}
-
-func splitArgsFlags(parts []string) (args []string, flags []string) {
-	args = make([]string, 0, len(parts))
-	flags = make([]string, 0, len(parts))
-	for _, part := range parts {
-		if strings.HasPrefix(part, "-") {
-			// Extract flag name before '=' if present
-			flag := part
-			if before, _, ok := strings.Cut(part, "="); ok {
-				flag = before
-			}
-			flags = append(flags, flag)
-		} else {
-			args = append(args, part)
-		}
-	}
-	return args, flags
-}
-
 // newInterp creates a new interpreter with the current shell state. A nil
 // stdin is equivalent to an empty input stream.
 func (s *Shell) newInterp(stdin io.Reader, stdout, stderr io.Writer) (*interp.Runner, error) {
@@ -302,11 +185,6 @@ func (s *Shell) exec(ctx context.Context, command string) (string, string, error
 	var stdout, stderr bytes.Buffer
 	err := s.execCommon(ctx, command, &stdout, &stderr)
 	return stdout.String(), stderr.String(), err
-}
-
-// execStream executes commands using POSIX shell emulation with streaming output
-func (s *Shell) execStream(ctx context.Context, command string, stdout, stderr io.Writer) error {
-	return s.execCommon(ctx, command, stdout, stderr)
 }
 
 // IsInterrupt checks if an error is due to interruption

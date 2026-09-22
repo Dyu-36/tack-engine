@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
-	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/oauth"
 	openaioauth "github.com/charmbracelet/crush/internal/oauth/openai"
 	"github.com/stretchr/testify/require"
@@ -21,7 +20,7 @@ func TestSetProviderAPIKeyPersistsChatGPTCatalog(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "crush.json")
 			require.NoError(t, os.WriteFile(path, []byte(`{}`), 0o600))
 			store := &ConfigStore{
-				config: &Config{Providers: csync.NewMapFrom(map[string]ProviderConfig{
+				config: &Config{Providers: testMap(map[string]ProviderConfig{
 					providerID: {ID: providerID, Name: "ChatGPT", Type: catwalk.TypeOpenAI},
 				})},
 				globalDataPath: path,
@@ -61,7 +60,7 @@ func TestRefreshOAuthTokenRoutesSubscriptionProviderIDs(t *testing.T) {
 				ExpiresAt: time.Now().Add(-time.Hour).Unix(), AccountID: "acct_123",
 			}
 			store := &ConfigStore{
-				config: &Config{Providers: csync.NewMapFrom(map[string]ProviderConfig{
+				config: &Config{Providers: testMap(map[string]ProviderConfig{
 					providerID: {ID: providerID, OAuthToken: expired},
 				})},
 				globalDataPath: path,
@@ -124,7 +123,7 @@ func TestProjectOpenAISubscriptionProviders(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &Config{Providers: csync.NewMapFrom(tc.providers)}
+			cfg := &Config{Providers: testMap(tc.providers)}
 			got := ProjectOpenAISubscriptionProviders(cfg, tc.catalog)
 			require.Equal(t, tc.wantIDs, providerIDs(got))
 			require.Equal(t, tc.wantModel, got[len(got)-1].Models[0].ID)

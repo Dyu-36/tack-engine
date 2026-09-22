@@ -8,7 +8,6 @@ import (
 
 type (
 	sessionIDContextKey string
-	messageIDContextKey string
 	supportsImagesKey   string
 	modelNameKey        string
 )
@@ -16,8 +15,6 @@ type (
 const (
 	// SessionIDContextKey is the key for the session ID in the context.
 	SessionIDContextKey sessionIDContextKey = "session_id"
-	// MessageIDContextKey is the key for the message ID in the context.
-	MessageIDContextKey messageIDContextKey = "message_id"
 	// SupportsImagesContextKey is the key for the model's image support capability.
 	SupportsImagesContextKey supportsImagesKey = "supports_images"
 	// ModelNameContextKey is the key for the model name in the context.
@@ -40,11 +37,6 @@ func getContextValue[T any](ctx context.Context, key any, defaultValue T) T {
 // GetSessionFromContext retrieves the session ID from the context.
 func GetSessionFromContext(ctx context.Context) string {
 	return getContextValue(ctx, SessionIDContextKey, "")
-}
-
-// GetMessageFromContext retrieves the message ID from the context.
-func GetMessageFromContext(ctx context.Context) string {
-	return getContextValue(ctx, MessageIDContextKey, "")
 }
 
 // GetSupportsImagesFromContext retrieves whether the model supports images from the context.

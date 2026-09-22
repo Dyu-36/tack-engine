@@ -19,7 +19,7 @@ import (
 )
 
 // fakeTimeoutErr is a minimal net.Error implementation whose Timeout()
-// returns true. It is used to verify that IsStaleSocketErr never
+// returns true. It is used to verify that isStaleSocketErr never
 // classifies a timeout as stale.
 type fakeTimeoutErr struct{}
 
@@ -55,7 +55,7 @@ func TestIsStaleSocketErr(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tc.want, IsStaleSocketErr(tc.err))
+			require.Equal(t, tc.want, isStaleSocketErr(tc.err))
 		})
 	}
 }
@@ -121,7 +121,7 @@ func staleSocketPath(t *testing.T, path string) {
 		conn.Close()
 		t.Fatalf("expected stale socket at %q to refuse connections", path)
 	}
-	require.True(t, IsStaleSocketErr(dialErr),
+	require.True(t, isStaleSocketErr(dialErr),
 		"expected stale-socket dial error, got %v", dialErr)
 
 	t.Cleanup(func() {

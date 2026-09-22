@@ -232,42 +232,6 @@ func Release(dataDir string) error {
 	return closeErr
 }
 
-// ResetPool closes all pooled connections and clears the pool. This is
-// intended for use in tests to ensure a clean state between test cases.
-func ResetPool() {
-	poolMu.Lock()
-	defer poolMu.Unlock()
-	for path, entry := range pool {
-		entry.db.Close()
-		if entry.lock != nil {
-			entry.lock.release()
-		}
-		delete(pool, path)
-	}
-}
-
-// ConnectReadOnly opens a read-only SQLite database connection without running
-// migrations. Used for aggregating stats across multiple project databases.
-func ConnectReadOnly(ctx context.Context, dbPath string) (*sql.DB, error) {
-	if dbPath == "" {
-		return nil, fmt.Errorf("database path is empty")
-	}
-
-	db, err := openDBReadOnly(dbPath)
-	if err != nil {
-		return nil, err
-	}
-
-	db.SetMaxOpenConns(1)
-
-	if err = db.PingContext(ctx); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
-	}
-
-	return db, nil
-}
-
 func initGoose() error {
 	gooseInitOnce.Do(func() {
 		goose.SetBaseFS(FS)

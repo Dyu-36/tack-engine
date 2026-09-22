@@ -100,27 +100,6 @@ type Server struct {
 	logger  *slog.Logger
 }
 
-// SetLogger sets the logger for the server.
-func (s *Server) SetLogger(logger *slog.Logger) {
-	s.logger = logger
-}
-
-// Backend returns the server's backend. Intended for integration tests
-// that drive lifecycle transitions (detach, grace tuning) against a live
-// HTTP surface.
-func (s *Server) Backend() *backend.Backend {
-	return s.backend
-}
-
-// DefaultServer returns a new [Server] with the default address.
-func DefaultServer(cfg *config.ConfigStore) *Server {
-	hostURL, err := ParseHostURL(DefaultHost())
-	if err != nil {
-		panic("invalid default host")
-	}
-	return NewServer(cfg, hostURL.Scheme, hostURL.Host)
-}
-
 // NewServer creates a new [Server] with the given network and address.
 func NewServer(cfg *config.ConfigStore, network, address string) *Server {
 	s := new(Server)
@@ -189,6 +168,8 @@ func (s *Server) installHandler() {
 	mux.HandleFunc("GET /v1/workspaces/{id}/permissions/skip", c.handleGetWorkspacePermissionsSkip)
 	mux.HandleFunc("POST /v1/workspaces/{id}/permissions/skip", c.handlePostWorkspacePermissionsSkip)
 	mux.HandleFunc("POST /v1/workspaces/{id}/permissions/grant", c.handlePostWorkspacePermissionsGrant)
+	mux.HandleFunc("POST /v1/workspaces/{id}/questions/answer", c.handlePostWorkspaceQuestionsAnswer)
+	mux.HandleFunc("POST /v1/workspaces/{id}/questions/cancel", c.handlePostWorkspaceQuestionsCancel)
 
 	mux.HandleFunc("GET /v1/workspaces/{id}/agent", c.handleGetWorkspaceAgent)
 	mux.HandleFunc("POST /v1/workspaces/{id}/agent", c.handlePostWorkspaceAgent)
@@ -236,13 +217,6 @@ func (s *Server) installHandler() {
 	}
 }
 
-// Handler returns the server's HTTP handler. Exposed so test harnesses
-// can wrap it in an httptest.Server without going through the
-// production listener setup.
-func (s *Server) Handler() http.Handler {
-	return s.h.Handler
-}
-
 // Serve accepts incoming connections on the listener.
 func (s *Server) Serve(ln net.Listener) error {
 	return s.h.Serve(ln)
@@ -268,12 +242,6 @@ func (s *Server) closeListener() {
 		s.ln.Close()
 		s.ln = nil
 	}
-}
-
-// Close force closes all listeners and connections.
-func (s *Server) Close() error {
-	defer func() { s.closeListener() }()
-	return s.h.Close()
 }
 
 // Shutdown gracefully shuts down the server without interrupting active

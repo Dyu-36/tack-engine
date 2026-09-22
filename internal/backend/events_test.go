@@ -14,16 +14,16 @@ import (
 func TestGetWorkspaceProvidersProjectsConfiguredCodexCatalog(t *testing.T) {
 	b, _ := newTestBackend(t)
 	ws, _ := insertTestWorkspace(t, b, "/tmp/codex-catalog")
-	ws.Cfg = config.NewTestStore(&config.Config{
-		Providers: csync.NewMapFrom(map[string]config.ProviderConfig{
-			openaioauth.ProviderID: {
-				Name:       "ChatGPT (Codex)",
-				BaseURL:    openaioauth.CodexBackendURL,
-				OAuthToken: &oauth.Token{AccessToken: "access"},
-				Models:     []catwalk.Model{{ID: "gpt-live", Name: "Live"}},
-			},
-		}),
-		Options: &config.Options{DisableDefaultProviders: true},
+	providerMap := csync.NewMap[string, config.ProviderConfig]()
+	providerMap.Set(openaioauth.ProviderID, config.ProviderConfig{
+		Name:       "ChatGPT (Codex)",
+		BaseURL:    openaioauth.CodexBackendURL,
+		OAuthToken: &oauth.Token{AccessToken: "access"},
+		Models:     []catwalk.Model{{ID: "gpt-live", Name: "Live"}},
+	})
+	ws.Cfg = config.NewStore(&config.Config{
+		Providers: providerMap,
+		Options:   &config.Options{DisableDefaultProviders: true},
 	})
 
 	value, err := b.GetWorkspaceProviders(ws.ID)

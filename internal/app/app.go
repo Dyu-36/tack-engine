@@ -23,7 +23,6 @@ import (
 	"github.com/charmbracelet/crush/internal/clipboard"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/db"
-	"github.com/charmbracelet/crush/internal/event"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/format"
 	"github.com/charmbracelet/crush/internal/herdr"
@@ -35,7 +34,6 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/session"
-	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/ui/anim"
 	"github.com/charmbracelet/crush/internal/ui/styles"
@@ -763,16 +761,6 @@ func (app *App) Shutdown() {
 
 	// Now run remaining cleanup tasks in parallel.
 	var wg sync.WaitGroup
-
-	// Send exit event
-	wg.Go(func() {
-		event.AppExited()
-	})
-
-	// Kill all background shells.
-	wg.Go(func() {
-		shell.GetBackgroundShellManager().KillAll(shutdownCtx)
-	})
 
 	// Close herdr client to stop its background writer.
 	app.herdrClient.Close()

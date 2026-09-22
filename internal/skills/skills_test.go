@@ -437,7 +437,7 @@ func TestParseContent_NoFrontmatter(t *testing.T) {
 func TestDiscoverBuiltin(t *testing.T) {
 	t.Parallel()
 
-	discovered := DiscoverBuiltin()
+	discovered, _ := DiscoverBuiltinWithStates()
 	require.NotEmpty(t, discovered)
 
 	var found bool

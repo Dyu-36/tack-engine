@@ -647,7 +647,10 @@ func serveReceiver(t *testing.T, r *callbackReceiver) string {
 		r.fixedPort = probe.Addr().(*net.TCPAddr).Port
 		_ = probe.Close()
 	}
-	require.NoError(t, r.bind())
+	r.mu.Lock()
+	err := r.bindLocked()
+	r.mu.Unlock()
+	require.NoError(t, err)
 	return fmt.Sprintf("http://localhost:%d", r.port)
 }
 
