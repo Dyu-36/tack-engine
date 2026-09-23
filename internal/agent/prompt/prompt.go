@@ -298,16 +298,14 @@ func contextManifestDigest(d PromptDat) string {
 	return b.String()
 }
 
-// skillReadTool returns the name of the enabled file-read tool for loading
-// skills, like Pi's skillFileReadTool: the first of read or powershell that
-// is registered. Empty when no file-read tool is enabled, in which case the
-// prompt omits the skills section.
+// skillReadTool mirrors Pi's progressive-disclosure gate. Gotack's Windows
+// core always exposes the read tool unless the user disables it; shell-only
+// agents do not advertise skills because an arbitrary PowerShell command is
+// not treated as a dedicated skill-file reader.
 func skillReadTool(tools []ToolInfo) string {
-	for _, candidate := range []string{"read", "powershell"} {
-		for _, tool := range tools {
-			if tool.Name == candidate {
-				return candidate
-			}
+	for _, tool := range tools {
+		if tool.Name == "read" {
+			return "read"
 		}
 	}
 	return ""
@@ -507,7 +505,7 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 		UserSystem:    resources.System,
 		ReplaceSystem: resources.Replace,
 		AppendSystem:  resources.Append,
-		Sources:       append([]string{"builtin:coder"}, resources.Sources...),
+		Sources:       append([]string{"builtin:" + p.name}, resources.Sources...),
 		Provider:      provider,
 		Model:         model,
 		Config:        *cfg,
