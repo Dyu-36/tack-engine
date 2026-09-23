@@ -18,12 +18,20 @@ func coderTemplate(t *testing.T) string {
 }
 
 // TestCoderTemplateMatchesPiShape validates the shipped coder.md.tpl: it must
-// parse and render, and it must follow Pi's section order (role preamble,
-// available tools, guidelines, project context, skills, cwd/date last).
+// parse and render in the same compact section order as Pi's current prompt:
+// preamble, tools, rules, optional context/skills, and cwd last.
 func TestCoderTemplateMatchesPiShape(t *testing.T) {
 	t.Parallel()
 
-	p, err := NewPrompt("coder", coderTemplate(t), withTimeFunc(timeNowStub))
+	p, err := NewPrompt(
+		"coder",
+		coderTemplate(t),
+		withTimeFunc(timeNowStub),
+		WithTools(
+			[]ToolInfo{{Name: "read", Snippet: "Read file contents"}},
+			[]string{"Be concise in your responses"},
+		),
+	)
 	require.NoError(t, err)
 
 	store := newTestStore(t, t.TempDir())
@@ -31,18 +39,19 @@ func TestCoderTemplateMatchesPiShape(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Contains(t, text, "You are an expert coding assistant operating inside Gotack, a coding agent harness.")
-	require.Contains(t, text, "Available tools:")
+	require.Contains(t, text, "<tools>")
+	require.Contains(t, text, "<rules>")
+	require.Contains(t, text, "<cwd>")
+	require.NotContains(t, text, "Current date and time:")
+	require.NotContains(t, text, "Current platform:")
 	require.NotContains(t, text, "you may have access to other custom tools")
-	require.Contains(t, text, "Guidelines:")
-	require.Contains(t, text, "Current date and time:")
-	require.Contains(t, text, "Current working directory:")
 
-	// The Git block was removed; no git introspection should leak.
-	require.NotContains(t, text, "git repo")
-	require.NotContains(t, text, "Git status")
-	require.NotContains(t, text, "Recent commits")
+	preamble := strings.Index(text, "You are an expert coding assistant")
+	tools := strings.Index(text, "<tools>")
+	rules := strings.Index(text, "<rules>")
+	cwd := strings.Index(text, "<cwd>")
+	require.True(t, preamble >= 0 && preamble < tools && tools < rules && rules < cwd)
 
-	// Tools removed from the registry must not be advertised in the prompt.
 	for _, removed := range []string{
 		"multiedit",
 		"lsp_",
@@ -60,9 +69,6 @@ func TestCoderTemplateMatchesPiShape(t *testing.T) {
 	}
 }
 
-// TestCoderTemplateRendersRegistryToolsAndGuidelines verifies the prompt's tool
-// section is driven by the registry projection: exactly the supplied tools are
-// listed and their guidelines are rendered.
 func TestCoderTemplateRendersRegistryToolsAndGuidelines(t *testing.T) {
 	t.Parallel()
 
@@ -71,7 +77,7 @@ func TestCoderTemplateRendersRegistryToolsAndGuidelines(t *testing.T) {
 		{Name: "powershell", Snippet: "Execute PowerShell commands"},
 	}
 	guidelines := []string{
-		"Use read to examine files before editing. You must use this tool instead of cat or sed.",
+		"Use read to examine files instead of cat or sed",
 		"Be concise in your responses",
 	}
 
@@ -93,8 +99,6 @@ func TestCoderTemplateRendersRegistryToolsAndGuidelines(t *testing.T) {
 	require.NotContains(t, text, "- edit:")
 	require.NotContains(t, text, "- glob:")
 
-	// Skills render only when a file-read tool is registered; without tools
-	// the skills section is omitted.
 	skilled, err := NewPrompt(
 		"coder",
 		coderTemplate(t),
@@ -105,6 +109,7 @@ func TestCoderTemplateRendersRegistryToolsAndGuidelines(t *testing.T) {
 	require.NoError(t, err)
 	skilledText, err := skilled.Build(t.Context(), "openai", "gpt-5.2", store)
 	require.NoError(t, err)
+	require.Contains(t, skilledText, "<skills>")
 	require.Contains(t, skilledText, "<available_skills>")
 	require.Contains(t, skilledText, "with the read tool")
 
@@ -120,8 +125,6 @@ func TestCoderTemplateRendersRegistryToolsAndGuidelines(t *testing.T) {
 	require.NotContains(t, unskilledText, "<available_skills>")
 }
 
-// TestPromptGenerationTracksTools verifies a registry change rotates the stable
-// generation so prompt changes are attributable.
 func TestPromptGenerationTracksTools(t *testing.T) {
 	t.Parallel()
 
