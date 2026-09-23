@@ -147,6 +147,7 @@ func TestPromptGenerationTracksTools(t *testing.T) {
 	same := build([]ToolInfo{{Name: "read", Snippet: "Read file contents"}}, []string{"Be concise in your responses"})
 	changed := build([]ToolInfo{{Name: "read", Snippet: "Read file contents"}, {Name: "glob", Snippet: "Find files"}}, []string{"Be concise in your responses"})
 
+	require.Empty(t, base.Generation.Dynamic, "coder prompt has no dynamic date section")
 	require.Empty(t, same.Generation.ChangedStable(base.Generation))
 	require.Equal(t, []string{"tools"}, changed.Generation.ChangedStable(base.Generation))
 }
