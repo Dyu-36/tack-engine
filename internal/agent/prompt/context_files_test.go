@@ -71,7 +71,7 @@ func TestPromptSourcesAndSizeDiagnostics(t *testing.T) {
 	require.Contains(t, build.Sources, "builtin:coder")
 	var foundContext bool
 	for _, source := range build.Sources {
-		if strings.HasSuffix(filepath.ToSlash(source), "/AGENTS.md") {
+		if strings.HasSuffix(strings.ToLower(filepath.ToSlash(source)), "/agents.md") {
 			foundContext = true
 		}
 	}
