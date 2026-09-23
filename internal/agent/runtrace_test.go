@@ -280,8 +280,8 @@ func TestRunTraceFingerprintLastWriteWins(t *testing.T) {
 	// Multi-step tool loops call FingerprintFinalRequest once per
 	// PrepareStep; the final request of the run is the one published.
 	trace := newRunTrace("")
-	trace.FingerprintFinalRequest(requestShapeProjection{SystemPrefix: "first"})
-	trace.FingerprintFinalRequest(requestShapeProjection{SystemPrefix: "second"})
+	trace.FingerprintFinalRequest(requestShapeProjection{SystemPrompt: "first"})
+	trace.FingerprintFinalRequest(requestShapeProjection{SystemPrompt: "second"})
 	snap := trace.Snapshot()
 	require.Equal(t, len("second"), snap.StablePrefixBytes)
 }
@@ -387,7 +387,6 @@ func TestRunTracePromptPartsHMACDomainSeparated(t *testing.T) {
 
 func TestRequestShapeProjectionEncodingIsLengthPrefixed(t *testing.T) {
 	shape := requestShapeProjection{
-		SystemPrefix:    "pre",
 		SystemPrompt:    "ab",
 		Prompt:          "c",
 		HistoryShape:    "user;text=1;call=0;file=0;reasoning=0;result=0",
@@ -399,7 +398,6 @@ func TestRequestShapeProjectionEncodingIsLengthPrefixed(t *testing.T) {
 		Model:           "gpt-5",
 	}
 	encoded := string(shape.encode())
-	require.Contains(t, encoded, "system_prefix=3:pre\n")
 	require.Contains(t, encoded, "system_prompt=2:ab\n")
 	require.Contains(t, encoded, "prompt=1:c\n")
 	require.Contains(t, encoded, "tool_count=1\n")
