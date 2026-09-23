@@ -25,25 +25,6 @@ const (
 	defaultInitializeAs  = "AGENTS.md"
 )
 
-var defaultContextPaths = []string{
-	".github/copilot-instructions.md",
-	".cursorrules",
-	".cursor/rules/",
-	"CLAUDE.md",
-	"CLAUDE.local.md",
-	"GEMINI.md",
-	"gemini.md",
-	"crush.md",
-	"crush.local.md",
-	"Crush.md",
-	"Crush.local.md",
-	"CRUSH.md",
-	"CRUSH.local.md",
-	"AGENTS.md",
-	"agents.md",
-	"Agents.md",
-}
-
 type SelectedModelType string
 
 // String returns the string representation of the [SelectedModelType].
@@ -361,8 +342,8 @@ func (Attribution) JSONSchemaExtend(schema *jsonschema.Schema) {
 }
 
 type Options struct {
-	ContextPaths         []string    `json:"context_paths,omitempty" jsonschema:"description=Paths to files containing context information for the AI,example=.cursorrules,example=CRUSH.md"`
-	GlobalContextPaths   []string    `json:"global_context_paths,omitempty" jsonschema:"description=Paths to files containing global context information for the AI,default=~/.config/crush/CRUSH.md,default=~/.config/AGENTS.md"`
+	ContextPaths         []string    `json:"context_paths,omitempty" jsonschema:"description=Additional explicit context paths. Gotack's default discovery follows Pi-style AGENTS.override.md/AGENTS.md/CLAUDE.md inheritance."`
+	GlobalContextPaths   []string    `json:"global_context_paths,omitempty" jsonschema:"description=Additional explicit global context paths. Gotack's default global context follows Pi-style AGENTS.override.md/AGENTS.md/CLAUDE.md discovery."`
 	SkillsPaths          []string    `json:"skills_paths,omitempty" jsonschema:"description=Paths to directories containing Agent Skills (folders with SKILL.md files),example=~/.config/crush/skills,example=./skills"`
 	ProjectTrusted       *bool       `json:"project_trusted,omitempty" jsonschema:"description=Whether project-local dynamic resources are trusted. Unset preserves standalone full-trust behavior,default=true"`
 	ExtensionPaths       []string    `json:"extension_paths,omitempty" jsonschema:"description=Additional directories containing Gotack extension manifests"`
