@@ -26,7 +26,7 @@ func promptGlobalConfigDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("system prompt directory: %w", err)
 	}
-	return filepath.Join(dir, "gotack", "engine", "config"), nil
+	return filepath.Join(dir, "gotack", "engine", "prompt-config"), nil
 }
 
 func loadSystemResources(workingDir string, projectTrusted bool) (systemResources, error) {
