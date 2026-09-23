@@ -210,11 +210,11 @@ type activeCancel struct {
 }
 
 type sessionAgent struct {
-	largeModel         *csync.Value[Model]
-	smallModel         *csync.Value[Model]
-	systemPrompt       *csync.Value[string]
-	promptParts        *csync.Value[prompt.Snapshot]
-	tools              *csync.Slice[fantasy.AgentTool]
+	largeModel   *csync.Value[Model]
+	smallModel   *csync.Value[Model]
+	systemPrompt *csync.Value[string]
+	promptParts  *csync.Value[prompt.Snapshot]
+	tools        *csync.Slice[fantasy.AgentTool]
 
 	// generationMu guards the prompt build generation and the per-run
 	// change-reason baselines. SetPromptBuild publishes the current
@@ -944,7 +944,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 					prepared.Messages[i].ProviderOptions = a.getCacheControlOptions()
 				}
 			}
-
 
 			// Every request transformation that reaches the wire has
 			// happened by here: prompt/history preparation, the todo
