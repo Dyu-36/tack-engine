@@ -91,7 +91,6 @@ type ProviderConfig struct {
 	// Marks the provider as disabled.
 	Disable bool `json:"disable,omitempty" jsonschema:"description=Whether this provider is disabled,default=false"`
 
-
 	// Extra headers to send with each request to the provider. Values
 	// run through shell expansion at config-load time, so $VAR and
 	// $(cmd) work the same way they do in MCP headers. A header whose
