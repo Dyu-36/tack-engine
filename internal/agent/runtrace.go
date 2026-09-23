@@ -73,7 +73,6 @@ func SetRunTraceKeyDir(dir string) {
 // owned prompt text enter the digest input; the projection itself is
 // never logged, only its HMAC and byte counts are published.
 type requestShapeProjection struct {
-	SystemPrefix    string
 	SystemPrompt    string
 	Prompt          string
 	HistoryShape    string
@@ -96,7 +95,6 @@ func (p requestShapeProjection) encode() []byte {
 		b.WriteString(value)
 		b.WriteByte('\n')
 	}
-	writeField("system_prefix", p.SystemPrefix)
 	writeField("system_prompt", p.SystemPrompt)
 	writeField("prompt", p.Prompt)
 	writeField("history_shape", p.HistoryShape)
@@ -596,7 +594,7 @@ func (t *RunTrace) Snapshot() *notify.RunTelemetry {
 		telemetry.ChangeReasons = reasons
 	}
 	if t.fingerprinted {
-		telemetry.StablePrefixBytes = len(t.shape.SystemPrefix) + len(t.shape.SystemPrompt)
+		telemetry.StablePrefixBytes = len(t.shape.SystemPrompt)
 		telemetry.DynamicSuffixBytes = len(t.shape.Prompt)
 		telemetry.RequestShapeBytes = len(t.shape.encode())
 		if key := t.hmacKeyLocked(); key != nil {
