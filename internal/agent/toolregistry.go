@@ -101,21 +101,15 @@ func promptGuidelines(enabled []string) []string {
 
 	if hasShell && !hasGrep && !hasGlob {
 		rules = append(rules, "Use "+tools.BashToolName+" for file operations like dir, Get-ChildItem, Select-String")
-	} else if hasShell && (hasGrep || hasGlob) {
-		rules = append(rules, "Prefer grep/glob tools over "+tools.BashToolName+" for file exploration (faster, respects .gitignore)")
 	}
-
-	if hasRead && hasEdit {
-		rules = append(rules, "Use "+tools.ViewToolName+" to examine files before editing. You must use this tool instead of cat or sed.")
+	if hasRead {
+		rules = append(rules, "Use "+tools.ViewToolName+" to examine files instead of cat or sed")
 	}
 	if hasEdit {
 		rules = append(rules, "Use edit for precise changes (old text must match exactly)")
 	}
 	if hasWrite {
 		rules = append(rules, "Use write only for new files or complete rewrites")
-	}
-	if hasEdit || hasWrite {
-		rules = append(rules, "When summarizing your actions, output plain text directly - do NOT use cat or "+tools.BashToolName+" to display what you did")
 	}
 	rules = append(rules, "Be concise in your responses")
 	rules = append(rules, "Show file paths clearly when working with files")
