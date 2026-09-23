@@ -1996,7 +1996,6 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 
 	smallModel := a.smallModel.Get()
 	largeModel := a.largeModel.Get()
-	systemPromptPrefix := a.systemPromptPrefix.Get()
 
 	newAgent := func(m Model, p []byte, tok int64) fantasy.Agent {
 		opts := []fantasy.AgentOption{
