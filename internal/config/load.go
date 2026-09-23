@@ -566,13 +566,14 @@ func (c *Config) NormalizeOptions() {
 
 func (c *Config) setDefaults(workingDir, dataDir string) {
 	c.NormalizeOptions()
-	if len(c.Options.GlobalContextPaths) == 0 {
-		crushConfigDir := filepath.Dir(GlobalConfig())
-		c.Options.GlobalContextPaths = []string{
-			filepath.Join(crushConfigDir, "CRUSH.md"),
-			filepath.Join(filepath.Dir(crushConfigDir), "AGENTS.md"),
-		}
+	if c.Options.ContextPaths == nil {
+		c.Options.ContextPaths = []string{}
 	}
+	if c.Options.GlobalContextPaths == nil {
+		c.Options.GlobalContextPaths = []string{}
+	}
+	slices.Sort(c.Options.ContextPaths)
+	c.Options.ContextPaths = slices.Compact(c.Options.ContextPaths)
 	slices.Sort(c.Options.GlobalContextPaths)
 	c.Options.GlobalContextPaths = slices.Compact(c.Options.GlobalContextPaths)
 
@@ -611,12 +612,6 @@ func (c *Config) setDefaults(workingDir, dataDir string) {
 
 	// Apply defaults to LSP configurations
 	c.applyLSPDefaults()
-
-	// Add the default context paths if they are not already present
-	c.Options.ContextPaths = append(slices.Clone(defaultContextPaths), c.Options.ContextPaths...)
-
-	slices.Sort(c.Options.ContextPaths)
-	c.Options.ContextPaths = slices.Compact(c.Options.ContextPaths)
 
 	// Add the default skills directories if not already present.
 	for _, dir := range GlobalSkillsDirs() {
