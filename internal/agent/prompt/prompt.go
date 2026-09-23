@@ -225,6 +225,10 @@ func (p *Prompt) BuildPrompt(ctx context.Context, provider, model string, store 
 	}
 	snapshot := Snapshot{StablePrefix: stable, DynamicSuffix: dynamic}
 	text := snapshot.String()
+	dynamicGeneration := make(map[string]string)
+	if strings.Contains(dynamicTemplate, ".Date") {
+		dynamicGeneration[componentDate] = contentDigest(d.Date)
+	}
 	build := PromptBuild{
 		Text:         text,
 		Snapshot:     snapshot,
@@ -239,9 +243,7 @@ func (p *Prompt) BuildPrompt(ctx context.Context, provider, model string, store 
 				componentSkills:   contentDigest(d.AvailSkillXML),
 				componentTools:    contentDigest(toolManifestDigest(d)),
 			},
-			Dynamic: map[string]string{
-				componentDate: contentDigest(d.Date),
-			},
+			Dynamic: dynamicGeneration,
 		},
 	}
 	if p.name == "coder" {
