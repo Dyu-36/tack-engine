@@ -91,8 +91,6 @@ type ProviderConfig struct {
 	// Marks the provider as disabled.
 	Disable bool `json:"disable,omitempty" jsonschema:"description=Whether this provider is disabled,default=false"`
 
-	// Custom system prompt prefix.
-	SystemPromptPrefix string `json:"system_prompt_prefix,omitempty" jsonschema:"description=Custom prefix to add to system prompts for this provider"`
 
 	// Extra headers to send with each request to the provider. Values
 	// run through shell expansion at config-load time, so $VAR and
