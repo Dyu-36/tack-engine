@@ -212,7 +212,6 @@ type activeCancel struct {
 type sessionAgent struct {
 	largeModel         *csync.Value[Model]
 	smallModel         *csync.Value[Model]
-	systemPromptPrefix *csync.Value[string]
 	systemPrompt       *csync.Value[string]
 	promptParts        *csync.Value[prompt.Snapshot]
 	tools              *csync.Slice[fantasy.AgentTool]
@@ -286,7 +285,6 @@ type sessionAgent struct {
 type SessionAgentOptions struct {
 	LargeModel           Model
 	SmallModel           Model
-	SystemPromptPrefix   string
 	SystemPrompt         string
 	IsSubAgent           bool
 	DisableAutoSummarize bool
@@ -305,7 +303,6 @@ func NewSessionAgent(
 	return &sessionAgent{
 		largeModel:           csync.NewValue(opts.LargeModel),
 		smallModel:           csync.NewValue(opts.SmallModel),
-		systemPromptPrefix:   csync.NewValue(opts.SystemPromptPrefix),
 		systemPrompt:         csync.NewValue(opts.SystemPrompt),
 		promptParts:          csync.NewValue(prompt.Snapshot{}),
 		isSubAgent:           opts.IsSubAgent,
@@ -721,7 +718,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	agentTools := a.tools.Copy()
 	largeModel := a.largeModel.Get()
 	systemPrompt := a.systemPrompt.Get()
-	promptPrefix := a.systemPromptPrefix.Get()
 	historyStarted := trace.StartSpan()
 	currentSession, err := a.sessions.Get(ctx, call.SessionID)
 	if err != nil {
@@ -949,19 +945,16 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				}
 			}
 
-			if promptPrefix != "" {
-				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(promptPrefix)}, prepared.Messages...)
-			}
 
 			// Every request transformation that reaches the wire has
 			// happened by here: prompt/history preparation, the todo
 			// reminder, queued-prompt folding, provider media
-			// workarounds, cache-control options and the prompt prefix.
+			// workarounds and cache-control options.
 			// The final request fingerprint is therefore taken from this
 			// exact state; multi-step runs overwrite, so the last
 			// request of the run wins.
 			trace.FingerprintFinalRequest(a.buildRequestShape(
-				promptPrefix, runSystemPrompt, call.Prompt, call.Attachments,
+				runSystemPrompt, call.Prompt, call.Attachments,
 				prepared.Messages, prepared.Tools,
 				largeModel.ModelCfg.Provider, largeModel.ModelCfg.Model,
 			))
@@ -1460,7 +1453,6 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 
 	// Copy mutable fields under lock to avoid races with SetModels.
 	largeModel := a.largeModel.Get()
-	systemPromptPrefix := a.systemPromptPrefix.Get()
 
 	currentSession, err := a.sessions.Get(ctx, sessionID)
 	if err != nil {
@@ -1519,9 +1511,6 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		},
 		PrepareStep: func(callContext context.Context, options fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
 			prepared.Messages = options.Messages
-			if systemPromptPrefix != "" {
-				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(systemPromptPrefix)}, prepared.Messages...)
-			}
 			return callContext, prepared, nil
 		},
 		OnReasoningDelta: func(id string, text string) error {
@@ -2025,11 +2014,6 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 		Headers: sessionHeaders(sessionID),
 		PrepareStep: func(callCtx context.Context, opts fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
 			prepared.Messages = opts.Messages
-			if systemPromptPrefix != "" {
-				prepared.Messages = append([]fantasy.Message{
-					fantasy.NewSystemMessage(systemPromptPrefix),
-				}, prepared.Messages...)
-			}
 			return callCtx, prepared, nil
 		},
 	}
@@ -2394,10 +2378,9 @@ func digestOfString(value string) string {
 
 // buildRequestShape assembles the sanitized projection of the final
 // prepared request that feeds the run fingerprint.
-func (a *sessionAgent) buildRequestShape(systemPrefix, systemPrompt, prompt string, attachments []message.Attachment, messages []fantasy.Message, tools []fantasy.AgentTool, provider, model string) requestShapeProjection {
+func (a *sessionAgent) buildRequestShape(systemPrompt, prompt string, attachments []message.Attachment, messages []fantasy.Message, tools []fantasy.AgentTool, provider, model string) requestShapeProjection {
 	names, schemas := toolShape(tools)
 	return requestShapeProjection{
-		SystemPrefix:    systemPrefix,
 		SystemPrompt:    systemPrompt,
 		Prompt:          prompt,
 		HistoryShape:    historyShape(messages),
