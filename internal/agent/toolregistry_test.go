@@ -63,8 +63,8 @@ func TestPromptGuidelinesTrackEnabledTools(t *testing.T) {
 	t.Parallel()
 
 	full := promptGuidelines(allRegistryNames())
-	require.Contains(t, full, "Prefer grep/glob tools over powershell for file exploration (faster, respects .gitignore)")
-	require.Contains(t, full, "Use read to examine files before editing. You must use this tool instead of cat or sed.")
+	require.NotContains(t, full, "Prefer grep/glob tools over powershell for file exploration (faster, respects .gitignore)")
+	require.Contains(t, full, "Use read to examine files instead of cat or sed")
 	require.Contains(t, full, "Use edit for precise changes (old text must match exactly)")
 	require.Contains(t, full, "Use write only for new files or complete rewrites")
 	require.Contains(t, full, "Be concise in your responses")
@@ -74,6 +74,7 @@ func TestPromptGuidelinesTrackEnabledTools(t *testing.T) {
 	shellOnly := promptGuidelines([]string{"read", "powershell"})
 	require.Contains(t, shellOnly, "Use powershell for file operations like dir, Get-ChildItem, Select-String")
 	require.NotContains(t, shellOnly, "Prefer grep/glob tools over powershell for file exploration (faster, respects .gitignore)")
+	require.Contains(t, shellOnly, "Use read to examine files instead of cat or sed")
 	require.NotContains(t, shellOnly, "Use edit for precise changes (old text must match exactly)")
 	require.NotContains(t, shellOnly, "Use write only for new files or complete rewrites")
 }
