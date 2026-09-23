@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,6 +39,7 @@ type PromptDat struct {
 	UserSystem         string
 	ReplaceSystem      bool
 	AppendSystem       string
+	Sources            []string
 	Provider           string
 	Model              string
 	Config             config.Config
@@ -151,9 +153,12 @@ func changedKinds(prev, cur map[string]string) []string {
 // reasoning. All three come from the same promptData pass, so they can
 // never describe different inputs.
 type PromptBuild struct {
-	Text       string
-	Snapshot   Snapshot
-	Generation *Generation
+	Text         string
+	Snapshot     Snapshot
+	Generation   *Generation
+	Bytes        int
+	ApproxTokens int
+	Sources      []string
 }
 
 type Option func(*Prompt)
@@ -218,9 +223,14 @@ func (p *Prompt) BuildPrompt(ctx context.Context, provider, model string, store 
 	if err != nil {
 		return PromptBuild{}, err
 	}
-	return PromptBuild{
-		Text:     (&Snapshot{StablePrefix: stable, DynamicSuffix: dynamic}).String(),
-		Snapshot: Snapshot{StablePrefix: stable, DynamicSuffix: dynamic},
+	snapshot := Snapshot{StablePrefix: stable, DynamicSuffix: dynamic}
+	text := snapshot.String()
+	build := PromptBuild{
+		Text:         text,
+		Snapshot:     snapshot,
+		Bytes:        len(text),
+		ApproxTokens: (len(text) + 3) / 4,
+		Sources:      append([]string(nil), d.Sources...),
 		Generation: &Generation{
 			Stable: map[string]string{
 				componentTemplate: contentDigest(p.template + "\x00" + fmt.Sprint(d.ReplaceSystem) + "\x00" + d.UserSystem + "\x00" + d.AppendSystem),
@@ -233,7 +243,18 @@ func (p *Prompt) BuildPrompt(ctx context.Context, provider, model string, store 
 				componentDate: contentDigest(d.Date),
 			},
 		},
-	}, nil
+	}
+	if p.name == "coder" {
+		slog.Info("system prompt built",
+			"component", "prompt",
+			"bytes", build.Bytes,
+			"approx_tokens", build.ApproxTokens,
+			"sources", build.Sources,
+			"skills_bytes", len(d.AvailSkillXML),
+			"context_bytes", contextBytes(d),
+		)
+	}
+	return build, nil
 }
 
 func contentDigest(value string) string {
@@ -245,6 +266,17 @@ func contentDigest(value string) string {
 // ordered (lane, path, content digest) triples. Paths are the rendered
 // canonical bytes, so alias casings or input order cannot change the
 // manifest.
+func contextBytes(d PromptDat) int {
+	total := 0
+	for _, file := range d.ContextFiles {
+		total += len(file.Content)
+	}
+	for _, file := range d.GlobalContextFiles {
+		total += len(file.Content)
+	}
+	return total
+}
+
 func contextManifestDigest(d PromptDat) string {
 	var b strings.Builder
 	appendLane := func(label string, files []ContextFile) {
@@ -447,6 +479,10 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 	platform := runtime.GOOS
 
 	cfg := store.Config()
+	defaultProjectContext, defaultGlobalContext, err := loadDefaultContextFiles(workingDir, platform)
+	if err != nil {
+		return PromptDat{}, err
+	}
 	contextFiles := loadContextFiles(cfg.Options.ContextPaths, store, platform)
 	globalContextFiles := loadContextFiles(cfg.Options.GlobalContextPaths, store, platform)
 
@@ -471,6 +507,7 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 		UserSystem:    resources.System,
 		ReplaceSystem: resources.Replace,
 		AppendSystem:  resources.Append,
+		Sources:       append([]string{"builtin:coder"}, resources.Sources...),
 		Provider:      provider,
 		Model:         model,
 		Config:        *cfg,
@@ -483,11 +520,24 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 		SkillReadTool: skillReadTool(p.tools),
 	}
 
-	for _, group := range contextFiles {
-		data.ContextFiles = append(data.ContextFiles, group.Files...)
+	seen := make(map[string]struct{})
+	for _, file := range defaultGlobalContext {
+		data.GlobalContextFiles = appendUniqueContextFile(data.GlobalContextFiles, file, seen, platform)
+		data.Sources = append(data.Sources, file.Path)
 	}
-	for _, group := range globalContextFiles {
-		data.GlobalContextFiles = append(data.GlobalContextFiles, group.Files...)
+	for _, file := range defaultProjectContext {
+		data.ContextFiles = appendUniqueContextFile(data.ContextFiles, file, seen, platform)
+		data.Sources = append(data.Sources, file.Path)
+	}
+	before := len(data.ContextFiles)
+	data.ContextFiles = appendUniqueContextGroups(data.ContextFiles, contextFiles, seen, platform)
+	for _, file := range data.ContextFiles[before:] {
+		data.Sources = append(data.Sources, file.Path)
+	}
+	before = len(data.GlobalContextFiles)
+	data.GlobalContextFiles = appendUniqueContextGroups(data.GlobalContextFiles, globalContextFiles, seen, platform)
+	for _, file := range data.GlobalContextFiles[before:] {
+		data.Sources = append(data.Sources, file.Path)
 	}
 	return data, nil
 }
