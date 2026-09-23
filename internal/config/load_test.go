@@ -297,9 +297,8 @@ func TestConfig_setDefaults(t *testing.T) {
 		require.Empty(t, cfg.Options.TUI.DiffMode)
 		require.Equal(t, ScrollbarDefault, cfg.Options.TUI.Scrollbar)
 		require.Equal(t, ExitBannerDefault, cfg.Options.TUI.ExitBanner)
-		for _, path := range defaultContextPaths {
-			require.Contains(t, cfg.Options.ContextPaths, path)
-		}
+		require.Empty(t, cfg.Options.ContextPaths)
+		require.Empty(t, cfg.Options.GlobalContextPaths)
 	})
 
 	t.Run("sets TUI defaults only when unset", func(t *testing.T) {
