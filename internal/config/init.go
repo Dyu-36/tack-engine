@@ -14,6 +14,14 @@ const (
 	InitFlagFilename = "init"
 )
 
+var projectContextFilenames = []string{
+	"AGENTS.override.md",
+	"AGENTS.md",
+	"AGENTS.MD",
+	"CLAUDE.md",
+	"CLAUDE.MD",
+}
+
 type ProjectInitFlag struct {
 	Initialized bool `json:"initialized"`
 }
@@ -77,13 +85,9 @@ func contextPathsExist(dir string) (bool, error) {
 		}
 	}
 
-	// Check if any of the default context paths exist in the directory
-	for _, path := range defaultContextPaths {
-		// Extract just the filename from the path
-		_, filename := filepath.Split(path)
-		filename = strings.ToLower(filename)
-
-		if slices.Contains(files, filename) {
+	// Initialization follows the same Pi-style context names as the coder prompt.
+	for _, filename := range projectContextFilenames {
+		if slices.Contains(files, strings.ToLower(filename)) {
 			return true, nil
 		}
 	}
