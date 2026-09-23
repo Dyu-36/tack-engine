@@ -9,7 +9,7 @@ import (
 
 func TestSystemResourcesPrecedenceAndLiteralContent(t *testing.T) {
 	global, project := t.TempDir(), t.TempDir()
-	t.Setenv("CRUSH_GLOBAL_CONFIG", global)
+	t.Setenv("TACK_GLOBAL_CONFIG", global)
 	put := func(root, name, text string) {
 		t.Helper()
 		if err := os.MkdirAll(root, 0o700); err != nil {
@@ -21,9 +21,11 @@ func TestSystemResourcesPrecedenceAndLiteralContent(t *testing.T) {
 	}
 	put(global, "SYSTEM.md", "global system")
 	put(global, "APPEND_SYSTEM.md", "global append")
-	put(filepath.Join(project, ".pi"), "SYSTEM.md", "pi fallback")
+	put(filepath.Join(project, ".pi"), "SYSTEM.md", "pi legacy system")
+	put(filepath.Join(project, ".pi"), "APPEND_SYSTEM.md", "pi legacy append")
 	put(filepath.Join(project, ".tack"), "SYSTEM.md", "literal {{.Config}}")
 	put(filepath.Join(project, ".tack"), "APPEND_SYSTEM.md", "project append")
+
 	p, err := NewPrompt("coder", coderTemplate(t))
 	if err != nil {
 		t.Fatal(err)
@@ -33,12 +35,13 @@ func TestSystemResourcesPrecedenceAndLiteralContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(first.Text, "literal {{.Config}}") || strings.Contains(first.Text, "global system") || strings.Contains(first.Text, "expert coding assistant") {
+	if !strings.Contains(first.Text, "literal {{.Config}}") || strings.Contains(first.Text, "global system") || strings.Contains(first.Text, "pi legacy system") || strings.Contains(first.Text, "expert coding assistant") {
 		t.Fatalf("incorrect replacement: %s", first.Text)
 	}
-	if !strings.Contains(first.Text, "global append\n\nproject append") {
-		t.Fatal(first.Text)
+	if !strings.Contains(first.Text, "project append") || strings.Contains(first.Text, "global append") || strings.Contains(first.Text, "pi legacy append") {
+		t.Fatalf("incorrect append precedence: %s", first.Text)
 	}
+
 	put(filepath.Join(project, ".tack"), "SYSTEM.md", "changed")
 	second, err := p.BuildPrompt(t.Context(), "test", "model", store)
 	if err != nil {
@@ -54,7 +57,7 @@ func TestSystemResourcesPrecedenceAndLiteralContent(t *testing.T) {
 
 func TestSystemResourcesEmptyOverrideAndLimits(t *testing.T) {
 	global, project := t.TempDir(), t.TempDir()
-	t.Setenv("CRUSH_GLOBAL_CONFIG", global)
+	t.Setenv("TACK_GLOBAL_CONFIG", global)
 	path := filepath.Join(global, "SYSTEM.md")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -84,7 +87,7 @@ func TestLoadSystemResourcesUntrustedProjectUsesOnlyGlobal(t *testing.T) {
 	root := t.TempDir()
 	global := filepath.Join(root, "global")
 	workdir := filepath.Join(root, "project")
-	for _, dir := range []string{global, filepath.Join(workdir, ".pi")} {
+	for _, dir := range []string{global, filepath.Join(workdir, ".tack"), filepath.Join(workdir, ".pi")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -95,13 +98,17 @@ func TestLoadSystemResourcesUntrustedProjectUsesOnlyGlobal(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(global, "APPEND_SYSTEM.md"), []byte("global append"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".pi", "SYSTEM.md"), []byte("project system"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, ".tack", "SYSTEM.md"), []byte("project system"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workdir, ".pi", "APPEND_SYSTEM.md"), []byte("project append"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, ".tack", "APPEND_SYSTEM.md"), []byte("project append"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("CRUSH_GLOBAL_CONFIG", global)
+	if err := os.WriteFile(filepath.Join(workdir, ".pi", "SYSTEM.md"), []byte("pi legacy system"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TACK_GLOBAL_CONFIG", global)
+
 	got, err := loadSystemResources(workdir, false)
 	if err != nil {
 		t.Fatal(err)
@@ -111,5 +118,28 @@ func TestLoadSystemResourcesUntrustedProjectUsesOnlyGlobal(t *testing.T) {
 	}
 	if got.Append != "global append" {
 		t.Fatalf("append = %q", got.Append)
+	}
+}
+
+func TestLoadSystemResourcesNeverFallsBackToPiDirectory(t *testing.T) {
+	global, project := t.TempDir(), t.TempDir()
+	t.Setenv("TACK_GLOBAL_CONFIG", global)
+	legacy := filepath.Join(project, ".pi")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "SYSTEM.md"), []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "APPEND_SYSTEM.md"), []byte("legacy append"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadSystemResources(project, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Replace || got.System != "" || got.Append != "" {
+		t.Fatalf(".pi prompt resources must be ignored: %+v", got)
 	}
 }
